@@ -1,6 +1,10 @@
 CS 118 Project 1 - HTTP Proxy
 =============================
 
+Partners:
+Tania DePasquale
+Julian Brown
+
 ## To start proxy server:
 
 ```
