@@ -1,7 +1,7 @@
 CS 118 Project 1 - HTTP Proxy
 =============================
 
-# To start proxy server:
+## To start proxy server:
 
 ```
 ./waf
@@ -9,10 +9,10 @@ CS 118 Project 1 - HTTP Proxy
 build/http-proxy
 ```
 
-# To test:
+## To test:
 
 Use telnet!
 
-# TODO:
+## TODO:
 
 Get child processes to exit correctly
