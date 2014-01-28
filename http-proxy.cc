@@ -28,7 +28,7 @@ int main(void)
       
   server_addr.sin_family = AF_INET;    
   server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");//htonl(INADDR_ANY); 
-  server_addr.sin_port = htons(15016);    
+  server_addr.sin_port = htons(15019);    
  
   bind(listenfd, (struct sockaddr*) &server_addr, sizeof(server_addr));
   
@@ -48,9 +48,12 @@ int main(void)
         fprintf(stderr, "Read error\n");
       } else {
         buf[sizeof(buf) - 1] = 0;
+        fprintf(stderr, "Got %s from buf\n", buf);
         buffer.append(buf);
       }
     }
+
+    fprintf(stderr, "Buffer contains %s\n", buffer.c_str());
 
     try {
       req.ParseRequest(buffer.c_str(), buffer.length());
