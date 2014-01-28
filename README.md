@@ -12,3 +12,5 @@ build/http-proxy
 To test:
 
 Use telnet!
+
+Figure out how to prevent telnet from sending bullshit characters on enter...
