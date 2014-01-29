@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <netdb.h>
 
 #include "http-response.h"
 #include "http-request.h"
@@ -19,10 +20,11 @@ using namespace std;
 #define MAXPROCESSES 2
 
 string readRequest(int connfd);
-void recordChild(pid_t pid, bool unrecord);
+void recordChild(pid_t pid, bool record);
 void waitForClient();
 void acceptClient(int connfd);
 int setupServer(struct sockaddr_in server_addr);
+char* getHostIP(string hostname);
 
 int pids[MAXPROCESSES];
 int numChildren = 0;
@@ -30,6 +32,9 @@ int numChildren = 0;
 int main(void) {
   int listenfd = 0, connfd = 0;
   struct sockaddr_in server_addr;
+
+	memset(&server_addr, 0, sizeof(server_addr));
+  memset(&pids, 0, sizeof(pids));
 
   if ((listenfd = setupServer(server_addr)) == -1) {
   	// Something went wrong
@@ -44,7 +49,6 @@ int main(void) {
 	    memset(&client_addr, 0, sizeof(client_addr));
 	    socklen_t client_size = sizeof(client_addr);
 
-      fprintf(stderr, "Waiting to accept\n");
       connfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_size);
 
       pid_t pid = fork();
@@ -61,6 +65,7 @@ int main(void) {
 				recordChild(pid, true);
       }
     }
+
     // Don't accept new connections until we have room
     if (numChildren == MAXPROCESSES) {
     	waitForClient();
@@ -71,36 +76,42 @@ int main(void) {
 }
 
 /**
- * Does necessary setup for the server including:
- * Creating, binding, and listening into a socket
- *
- * @return The socket we are listening in on
+ * Attempts to send the request and retrieve a response
  */
-int setupServer(struct sockaddr_in server_addr) {
-	int one = 1, listenfd = socket(AF_INET, SOCK_STREAM, 0);
-  fprintf(stderr, "Socket retrieved successfully\n");
+void sendRequest (HttpRequest req) {
+	// More socket fun
+	struct sockaddr_in remote_addr;
+	memset(&remote_addr, 0, sizeof(remote_addr));
 
-  memset(&server_addr, 0, sizeof(server_addr));
-  memset(&pids, 0, sizeof(pids));
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-  server_addr.sin_family = AF_INET;
-  server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_addr.sin_port = htons(14886);
+	if (sockfd == -1) {
+		fprintf(stderr, "Failed to retrieve socket for remote\n");
+		return;
+	}
 
-  // TODO: Testing only? Allow reuse of socket quickly after we close it
-  setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+	// Get IP of host name
+	char* ip;
+	if (req.GetHost().length() == 0) {
+		ip = getHostIP(req.FindHeader("Host"));
+	} else {
+		ip = getHostIP(req.GetHost());
+	}
 
-  if (bind(listenfd, (struct sockaddr*) &server_addr, sizeof(server_addr)) == -1) {
-    fprintf(stderr, "Failed to bind to socket\n");
-    return -1;
-  }
+	if (ip == NULL) {
+		fprintf(stderr, "Invalid host name\n");
+	} else {
+		fprintf(stderr, "IP was found for host: %s\n", ip);
+	}
 
-  if(listen(listenfd, 20) == -1) {
-    fprintf(stderr, "Failed to listen\n");
-    return -1;
-  }
+	remote_addr.sin_family = AF_INET;
+	remote_addr.sin_addr.s_addr = inet_addr(ip);
+	remote_addr.sin_port = htons(80);
 
-  return listenfd;
+	if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
+		fprintf(stderr, "Failed to connect to remote server\n");
+		return;
+	}
 }
 
 /**
@@ -113,7 +124,7 @@ void acceptClient(int connfd) {
 
   try {
     req.ParseRequest(reqString.c_str(), reqString.length());
-    fprintf(stderr, "Request was of type %d\n", req.GetMethod());
+    sendRequest(req);
 
   } catch (ParseException e) {
     // Bad request, send appropriate error & close the connection
@@ -134,17 +145,20 @@ void acceptClient(int connfd) {
 }
 
 /**
- * Blocks until we can reap a child process
- * and unrecords the child process from our table
+ * Attempts to get an IP address for the provided hostname
+ * @return The IP address if found, NULL otherwise
  */
-void waitForClient() {
-	int status;
-  pid_t pid = waitpid(-1, &status, 0);
+char* getHostIP(string hostname) {
+	struct hostent *he;
+	struct in_addr **ip_addrs;
 
-  if (pid > 0 && WIFEXITED(status)) {
-  	fprintf(stderr, "A child %d exited\n", pid);
-		recordChild(pid, false);
-  }
+	if ((he = gethostbyname(hostname.c_str())) == NULL) {
+		fprintf(stderr, "Couldn't get host by name\n");
+		return NULL;
+	}
+
+	ip_addrs = (struct in_addr **) he->h_addr_list;
+	return inet_ntoa(*ip_addrs[0]);
 }
 
 /**
@@ -182,4 +196,50 @@ void recordChild(pid_t pid, bool record) {
 		}
 	}
 	return;
+}
+
+/**
+ * Does necessary setup for the server including:
+ * Creating, binding, and listening into a socket
+ *
+ * @return The socket we are listening in on
+ */
+int setupServer(struct sockaddr_in server_addr) {
+	int one = 1, listenfd;
+
+	if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		fprintf(stderr, "Failed to retrieve socket\n");
+		return -1;
+	}
+
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  server_addr.sin_port = htons(14886);
+
+  // TODO: Testing only? Allow reuse of socket quickly after we close it
+  setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+  if (bind(listenfd, (struct sockaddr*) &server_addr, sizeof(server_addr)) == -1) {
+    fprintf(stderr, "Failed to bind to socket\n");
+    return -1;
+  }
+
+  if(listen(listenfd, 20) == -1) {
+    fprintf(stderr, "Failed to listen\n");
+    return -1;
+  }
+
+  return listenfd;
+}
+
+/**
+ * Blocks until we can reap a child process
+ * and unrecords the child process from our table
+ */
+void waitForClient() {
+	int status;
+  pid_t pid = waitpid(-1, &status, 0);
+  if (pid > 0 && WIFEXITED(status)) {
+		recordChild(pid, false);
+  }
 }
