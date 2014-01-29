@@ -29,4 +29,5 @@ You should be able to send an HTTP request and get a response (in the end), righ
 
 ## TODO:
 
-Start actually processing the HTTP requests
+* Start actually processing the HTTP requests (sendRequest)
+* Caching

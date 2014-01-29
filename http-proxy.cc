@@ -51,6 +51,7 @@ int main(void) {
 
       connfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_size);
 
+      // Fork a process to take care of the client
       pid_t pid = fork();
       if (pid < 0) {
         fprintf(stderr, "Fork failed\n");
@@ -76,6 +77,7 @@ int main(void) {
 }
 
 /**
+ * TODO: Finish this
  * Attempts to send the request and retrieve a response
  */
 void sendRequest (HttpRequest req) {
