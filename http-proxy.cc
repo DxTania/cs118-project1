@@ -33,21 +33,21 @@ int main(void) {
   int listenfd = 0, connfd = 0;
   struct sockaddr_in server_addr;
 
-	memset(&server_addr, 0, sizeof(server_addr));
+  memset(&server_addr, 0, sizeof(server_addr));
   memset(&pids, 0, sizeof(pids));
 
   if ((listenfd = setupServer(server_addr)) == -1) {
-  	// Something went wrong
-  	return -1;
+    // Something went wrong
+    return -1;
   }
 
   // Main listening loop
   for (;;) {
     if (numChildren < MAXPROCESSES) {
-    	// Set up client address struct
-    	struct sockaddr_in client_addr;
-	    memset(&client_addr, 0, sizeof(client_addr));
-	    socklen_t client_size = sizeof(client_addr);
+      // Set up client address struct
+      struct sockaddr_in client_addr;
+      memset(&client_addr, 0, sizeof(client_addr));
+      socklen_t client_size = sizeof(client_addr);
 
       connfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_size);
 
@@ -57,19 +57,19 @@ int main(void) {
         return -1;
 
       } else if (pid == 0) {
-      	acceptClient(connfd);
+        acceptClient(connfd);
 
       } else {
-      	// We had space to run another process, record it
-				fprintf(stderr, "Connection accepted by child %d\n", pid);
-				recordChild(pid, true);
+        // We had space to run another process, record it
+        fprintf(stderr, "Connection accepted by child %d\n", pid);
+        recordChild(pid, true);
       }
     }
 
     // Don't accept new connections until we have room
     if (numChildren == MAXPROCESSES) {
-    	waitForClient();
-	  }
+      waitForClient();
+    }
   }
 
   return 0;
@@ -79,39 +79,39 @@ int main(void) {
  * Attempts to send the request and retrieve a response
  */
 void sendRequest (HttpRequest req) {
-	// More socket fun
-	struct sockaddr_in remote_addr;
-	memset(&remote_addr, 0, sizeof(remote_addr));
+  // More socket fun
+  struct sockaddr_in remote_addr;
+  memset(&remote_addr, 0, sizeof(remote_addr));
 
-	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-	if (sockfd == -1) {
-		fprintf(stderr, "Failed to retrieve socket for remote\n");
-		return;
-	}
+  if (sockfd == -1) {
+    fprintf(stderr, "Failed to retrieve socket for remote\n");
+    return;
+  }
 
-	// Get IP of host name
-	char* ip;
-	if (req.GetHost().length() == 0) {
-		ip = getHostIP(req.FindHeader("Host"));
-	} else {
-		ip = getHostIP(req.GetHost());
-	}
+  // Get IP of host name
+  char* ip;
+  if (req.GetHost().length() == 0) {
+    ip = getHostIP(req.FindHeader("Host"));
+  } else {
+    ip = getHostIP(req.GetHost());
+  }
 
-	if (ip == NULL) {
-		fprintf(stderr, "Invalid host name\n");
-	} else {
-		fprintf(stderr, "IP was found for host: %s\n", ip);
-	}
+  if (ip == NULL) {
+    fprintf(stderr, "Invalid host name\n");
+  } else {
+    fprintf(stderr, "IP was found for host: %s\n", ip);
+  }
 
-	remote_addr.sin_family = AF_INET;
-	remote_addr.sin_addr.s_addr = inet_addr(ip);
-	remote_addr.sin_port = htons(80);
+  remote_addr.sin_family = AF_INET;
+  remote_addr.sin_addr.s_addr = inet_addr(ip);
+  remote_addr.sin_port = htons(80);
 
-	if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
-		fprintf(stderr, "Failed to connect to remote server\n");
-		return;
-	}
+  if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
+    fprintf(stderr, "Failed to connect to remote server\n");
+    return;
+  }
 }
 
 /**
@@ -119,7 +119,7 @@ void sendRequest (HttpRequest req) {
  * Attempt to process the client's HTTP request
  */
 void acceptClient(int connfd) {
-	HttpRequest req;
+  HttpRequest req;
   string reqString = readRequest(connfd);
 
   try {
@@ -149,16 +149,16 @@ void acceptClient(int connfd) {
  * @return The IP address if found, NULL otherwise
  */
 char* getHostIP(string hostname) {
-	struct hostent *he;
-	struct in_addr **ip_addrs;
+  struct hostent *he;
+  struct in_addr **ip_addrs;
 
-	if ((he = gethostbyname(hostname.c_str())) == NULL) {
-		fprintf(stderr, "Couldn't get host by name\n");
-		return NULL;
-	}
+  if ((he = gethostbyname(hostname.c_str())) == NULL) {
+    fprintf(stderr, "Couldn't get host by name\n");
+    return NULL;
+  }
 
-	ip_addrs = (struct in_addr **) he->h_addr_list;
-	return inet_ntoa(*ip_addrs[0]);
+  ip_addrs = (struct in_addr **) he->h_addr_list;
+  return inet_ntoa(*ip_addrs[0]);
 }
 
 /**
@@ -168,7 +168,7 @@ char* getHostIP(string hostname) {
  * @return The entire request we read
  */
 string readRequest(int connfd) {
-	string buffer;
+  string buffer;
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL
     && memmem(buffer.c_str(), buffer.length(), "STOP", 4) == NULL) { // easy testing
     char buf[1025];
@@ -188,14 +188,14 @@ string readRequest(int connfd) {
  * If record is false, sets the space of the pid to 0
  */
 void recordChild(pid_t pid, bool record) {
-	for (int i = 0; i < MAXPROCESSES; i++) {
-		if (pids[i] == record? 0 : pid) {
-			pids[i] = record? pid : 0;
-			record ? numChildren++ : numChildren--;
-			break;
-		}
-	}
-	return;
+  for (int i = 0; i < MAXPROCESSES; i++) {
+    if (pids[i] == record? 0 : pid) {
+      pids[i] = record? pid : 0;
+      record ? numChildren++ : numChildren--;
+      break;
+    }
+  }
+  return;
 }
 
 /**
@@ -205,12 +205,12 @@ void recordChild(pid_t pid, bool record) {
  * @return The socket we are listening in on
  */
 int setupServer(struct sockaddr_in server_addr) {
-	int one = 1, listenfd;
+  int one = 1, listenfd;
 
-	if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		fprintf(stderr, "Failed to retrieve socket\n");
-		return -1;
-	}
+  if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    fprintf(stderr, "Failed to retrieve socket\n");
+    return -1;
+  }
 
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -237,9 +237,9 @@ int setupServer(struct sockaddr_in server_addr) {
  * and unrecords the child process from our table
  */
 void waitForClient() {
-	int status;
+  int status;
   pid_t pid = waitpid(-1, &status, 0);
   if (pid > 0 && WIFEXITED(status)) {
-		recordChild(pid, false);
+    recordChild(pid, false);
   }
 }
