@@ -1,7 +1,13 @@
 CS 118 Project 1 - HTTP Proxy
 =============================
 
-# To start proxy server:
+Partners:
+
+Tania DePasquale
+
+Julian Brown
+
+## To start proxy server:
 
 ```
 ./waf
@@ -9,7 +15,7 @@ CS 118 Project 1 - HTTP Proxy
 build/http-proxy
 ```
 
-# To test:
+## To test:
 
 Use telnet!
 
@@ -21,6 +27,6 @@ telnet 127.0.0.1 14886
 
 You should be able to send an HTTP request and get a response (in the end), right now since carraige returns are annoying to get into telnet typing STOP also closes the connection.
 
-# TODO:
+## TODO:
 
 Start actually processing the HTTP requests
