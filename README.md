@@ -31,3 +31,4 @@ You should be able to send an HTTP request and get a response (in the end), righ
 
 * Start actually processing the HTTP requests (sendRequest)
 * Caching
+* Connections that could possibly be waiting, are they queued?
