@@ -13,6 +13,14 @@ build/http-proxy
 
 Use telnet!
 
+First run the proxy server, then run the following telnet command
+
+```
+telnet 127.0.0.1 14886
+```
+
+You should be able to send an HTTP request and get a response (in the end), right now since carraige returns are annoying to get into telnet typing STOP also closes the connection.
+
 # TODO:
 
-Get child processes to exit correctly
+Start actually processing the HTTP requests
