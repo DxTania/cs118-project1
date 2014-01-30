@@ -19,7 +19,7 @@ using namespace std;
 
 #define MAXPROCESSES 2
 
-string readRequest(int connfd);
+string readFromSocket(int connfd);
 void recordChild(pid_t pid, bool record);
 void waitForClient();
 void acceptClient(int connfd);
@@ -86,7 +86,6 @@ void sendRequest (HttpRequest req) {
   memset(&remote_addr, 0, sizeof(remote_addr));
 
   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
   if (sockfd == -1) {
     fprintf(stderr, "Failed to retrieve socket for remote\n");
     return;
@@ -102,10 +101,13 @@ void sendRequest (HttpRequest req) {
 
   if (ip == NULL) {
     fprintf(stderr, "Invalid host name\n");
-  } else {
-    fprintf(stderr, "IP was found for host: %s\n", ip);
+    return;
   }
 
+  // Add if-modified-since header to request
+  //req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
+
+  // Connect to server that was requested
   remote_addr.sin_family = AF_INET;
   remote_addr.sin_addr.s_addr = inet_addr(ip);
   remote_addr.sin_port = htons(80);
@@ -114,6 +116,36 @@ void sendRequest (HttpRequest req) {
     fprintf(stderr, "Failed to connect to remote server\n");
     return;
   }
+
+  // TODO: Include If-Modified-Since header for caching
+
+  // Set up request for that server
+  size_t bufsize = sizeof(char) * req.GetTotalLength();
+  char* buf = (char*) malloc(bufsize);
+  if (buf == NULL) {
+    fprintf(stderr, "Failed to allocate buffer for request\n");
+    return;
+  }
+  memset(buf, 0, bufsize);
+  req.FormatRequest(buf);
+
+  fprintf(stderr, "Sending request to IP addr %s\n%s\n", ip, buf);
+
+  // Write request to server and end the request
+  write(sockfd, buf, sizeof(buf));
+  write(sockfd, "\r\n\r\n", 4);
+
+  // TODO: why does telnet to Google & using this way give different responses?!
+
+  // Wait for response from the server
+  HttpResponse resp;
+  string answer = readFromSocket(sockfd);
+  resp.ParseResponse(answer.c_str(), answer.length());
+
+  fprintf(stderr, "Details about the response:\n");
+  fprintf(stderr, "%s\n", answer.c_str());
+
+  free(buf);
 }
 
 /**
@@ -122,7 +154,7 @@ void sendRequest (HttpRequest req) {
  */
 void acceptClient(int connfd) {
   HttpRequest req;
-  string reqString = readRequest(connfd);
+  string reqString = readFromSocket(connfd);
 
   try {
     req.ParseRequest(reqString.c_str(), reqString.length());
@@ -169,7 +201,7 @@ char* getHostIP(string hostname) {
  *
  * @return The entire request we read
  */
-string readRequest(int connfd) {
+string readFromSocket(int connfd) {
   string buffer;
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL
     && memmem(buffer.c_str(), buffer.length(), "STOP", 4) == NULL) { // easy testing
@@ -204,7 +236,7 @@ void recordChild(pid_t pid, bool record) {
  * Does necessary setup for the server including:
  * Creating, binding, and listening into a socket
  *
- * @return The socket we are listening in on
+ * @return The socket we are successfully listening on
  */
 int setupServer(struct sockaddr_in server_addr) {
   int one = 1, listenfd;
@@ -237,6 +269,8 @@ int setupServer(struct sockaddr_in server_addr) {
 /**
  * Blocks until we can reap a child process
  * and unrecords the child process from our table
+ *
+ * TODO: Error handling for children that don't exit correctly
  */
 void waitForClient() {
   int status;
