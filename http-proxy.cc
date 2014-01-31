@@ -79,9 +79,10 @@ int main(void) {
 /**
  * TODO: Finish this
  * Attempts to send the request and retrieve a response
+ * Using a cache - HTTP Conditional Get
  */
 void sendRequest (HttpRequest req) {
-  // More socket fun
+  // More socket fun :D
   struct sockaddr_in remote_addr;
   memset(&remote_addr, 0, sizeof(remote_addr));
 
@@ -102,22 +103,28 @@ void sendRequest (HttpRequest req) {
   if (ip == NULL) {
     fprintf(stderr, "Invalid host name\n");
     return;
+  } else {
+    fprintf(stderr, "Connecting to IP: %s\n\n", ip);
   }
-
-  // Add if-modified-since header to request
-  //req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
   // Connect to server that was requested
   remote_addr.sin_family = AF_INET;
   remote_addr.sin_addr.s_addr = inet_addr(ip);
-  remote_addr.sin_port = htons(80);
+  if (req.GetPort() > 0) {
+    remote_addr.sin_port = htons(req.GetPort());
+  } else {
+    remote_addr.sin_port = htons(80);
+  }
 
   if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
     fprintf(stderr, "Failed to connect to remote server\n");
     return;
   }
 
-  // TODO: Include If-Modified-Since header for caching
+  // TODO: Include If-Modified-Since header with cached date
+  // If not cached, send request without the If-Modified-Since header
+  // Do not cache if cache-control is private (or no-cache?)
+  req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
   // Set up request for that server
   size_t bufsize = sizeof(char) * req.GetTotalLength();
@@ -129,13 +136,8 @@ void sendRequest (HttpRequest req) {
   memset(buf, 0, bufsize);
   req.FormatRequest(buf);
 
-  fprintf(stderr, "Sending request to IP addr %s\n%s\n", ip, buf);
-
-  // Write request to server and end the request
-  write(sockfd, buf, sizeof(buf));
-  write(sockfd, "\r\n\r\n", 4);
-
-  // TODO: why does telnet to Google & using this way give different responses?!
+  // Write the request to the server
+  write(sockfd, buf, bufsize);
 
   // Wait for response from the server
   HttpResponse resp;
@@ -144,6 +146,8 @@ void sendRequest (HttpRequest req) {
 
   fprintf(stderr, "Details about the response:\n");
   fprintf(stderr, "%s\n", answer.c_str());
+
+  // Cache the response if needed
 
   free(buf);
 }
@@ -203,8 +207,7 @@ char* getHostIP(string hostname) {
  */
 string readFromSocket(int connfd) {
   string buffer;
-  while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL
-    && memmem(buffer.c_str(), buffer.length(), "STOP", 4) == NULL) { // easy testing
+  while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
     if (read(connfd, buf, sizeof(buf) - 1) < 0) {
