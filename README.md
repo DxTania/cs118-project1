@@ -25,10 +25,14 @@ First run the proxy server, then run the following telnet command
 telnet 127.0.0.1 14886
 ```
 
-You should be able to send an HTTP request and get a response (in the end), right now since carraige returns are annoying to get into telnet typing STOP also closes the connection.
+You should be able to send an HTTP request and get a response (in the end), I added a file called carraige returns that can be copy and pasted into telnet to actually send a request.
 
 ## TODO:
 
-* Start actually processing the HTTP requests (sendRequest)
 * Caching
+  - Figure out what to store cache in
+  - Send If-Modified-Since headers
+  - Only cache if Cache-Control is not private?
+  - If we get Not Modified, return cache result to user
+  - Otherwise we update the cache and return that result to user
 * Connections that could possibly be waiting, are they queued?
