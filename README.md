@@ -35,4 +35,5 @@ You should be able to send an HTTP request and get a response (in the end), I ad
   - Only cache if Cache-Control is not private?
   - If we get Not Modified, return cache result to user
   - Otherwise we update the cache and return that result to user
+  - Also: Support both persistent & non-persistent connections
 * Connections that could possibly be waiting, are they queued?
