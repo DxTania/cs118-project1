@@ -81,7 +81,7 @@ int main(void) {
  * Attempts to send the request and retrieve a response
  * Using a cache - HTTP Conditional Get
  */
-void sendRequest (HttpRequest req) {
+string sendRequest (HttpRequest req) {
   // More socket fun :D
   struct sockaddr_in remote_addr;
   memset(&remote_addr, 0, sizeof(remote_addr));
@@ -89,7 +89,7 @@ void sendRequest (HttpRequest req) {
   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd == -1) {
     fprintf(stderr, "Failed to retrieve socket for remote\n");
-    return;
+    exit(1);
   }
 
   // Get IP of host name
@@ -102,7 +102,7 @@ void sendRequest (HttpRequest req) {
 
   if (ip == NULL) {
     fprintf(stderr, "Invalid host name\n");
-    return;
+    exit(1);
   } else {
     fprintf(stderr, "Connecting to IP: %s\n\n", ip);
   }
@@ -118,7 +118,7 @@ void sendRequest (HttpRequest req) {
 
   if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
     fprintf(stderr, "Failed to connect to remote server\n");
-    return;
+    exit(1);
   }
 
   // TODO: Include If-Modified-Since header with cached date
@@ -131,12 +131,13 @@ void sendRequest (HttpRequest req) {
   char* buf = (char*) malloc(bufsize);
   if (buf == NULL) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
-    return;
+    exit(1);
   }
   memset(buf, 0, bufsize);
   req.FormatRequest(buf);
 
   // Write the request to the server
+  fprintf(stderr, "Writing request to server\n%s", buf);
   write(sockfd, buf, bufsize);
 
   // Wait for response from the server
@@ -149,7 +150,10 @@ void sendRequest (HttpRequest req) {
 
   // Cache the response if needed
 
+  close(sockfd);
   free(buf);
+
+  return answer;
 }
 
 /**
@@ -162,7 +166,8 @@ void acceptClient(int connfd) {
 
   try {
     req.ParseRequest(reqString.c_str(), reqString.length());
-    sendRequest(req);
+    string response = sendRequest(req);
+    write(connfd, response.c_str(), response.length());
 
   } catch (ParseException e) {
     // Bad request, send appropriate error & close the connection

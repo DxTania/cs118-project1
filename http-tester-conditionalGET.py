@@ -4,11 +4,26 @@ from threading import Thread
 from httplib import HTTPConnection
 from BaseHTTPServer import BaseHTTPRequestHandler,HTTPServer
 from datetime import datetime, timedelta
-from bcolor import bcolors
+#from bcolor import bcolors
 import sys
 import time
 import re, socket, calendar
 
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+
+    def disable(self):
+        self.HEADER = ''
+        self.OKBLUE = ''
+        self.OKGREEN = ''
+        self.WARNING = ''
+        self.FAIL = ''
+        self.ENDC = ''
 
 class TestHandler(BaseHTTPRequestHandler):
 
@@ -79,7 +94,7 @@ class ServerThread (Thread):
             self.server = HTTPServer(('', self.port), TestHandler)
             self.server.serve_forever()
         except KeyboardInterrupt:
-            self.server.socket.close() 
+            self.server.socket.close()
 
 
 try:
@@ -131,4 +146,3 @@ except:
     server1.server.shutdown()
 
 server1.server.shutdown()
-
