@@ -68,6 +68,9 @@ when the child process dies (have parent check if dead)
 
 spawn a new one!
 
+if children send requests and main process receives responses
+child process can signal parent when done receiving requests on some timeout!!
+
 ### Timeouts and waiting:
 ```
 fd_set readfds;
@@ -86,3 +89,7 @@ timeout.tv_usec = 0;
 setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
             sizeof(timeout));
 ```
+
+GET http://127.0.0.1:21271/basic HTTP/1.1
+Host: 127.0.0.1:21271
+Accept-Encoding: identity

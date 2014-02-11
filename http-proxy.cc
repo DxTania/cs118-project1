@@ -60,7 +60,7 @@ int main(void) {
       // Set timeout for persistent connection closing
       // TODO:  a better way?
       struct timeval timeout;
-      timeout.tv_sec = 10;
+      timeout.tv_sec = 15;
       timeout.tv_usec = 0;
 
       setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
@@ -77,7 +77,7 @@ int main(void) {
 
       } else {
         // We had space to run another process, record it
-        fprintf(stderr, "Connection accepted by child %d\n", pid);
+        fprintf(stderr, "\nConnection accepted by child %d\n", pid);
         recordChild(pid, true);
       }
     }
@@ -136,6 +136,13 @@ int openConnectionWith(HttpRequest req) {
     exit(1);
   }
 
+  struct timeval timeout;
+      timeout.tv_sec = 10;
+      timeout.tv_usec = 0;
+
+      setsockopt (sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                  sizeof(timeout));
+
   return sockfd;
 }
 
@@ -172,80 +179,70 @@ void acceptClient(int connfd) {
   HttpRequest req;
 
   bool persistent = false;
-  bool connectionOpen = false, pipeOpen = false;
+  bool connectionOpen = false;
   int serverfd;
-  pid_t pid;
+  pid_t pid = -1;
 
-  do {
-    try {
-      const char* reqString = readRequest(connfd);
-
-      if (reqString == NULL) {
-        // TODO: wait for child to possibly read/write a response?
-        break;
-      }
-
-      req.ParseRequest(reqString, strlen(reqString));
-
-      persistent = req.GetVersion() == "1.1";
-
-      if (!connectionOpen) {
-        serverfd = openConnectionWith(req);
-        connectionOpen = true;
-      }
-
-      sendRequest(req, serverfd);
-
-      // If persistent HTTP/1.1, we fork a new process to handle all the reading
-      // And we keep accepting requests until a timeout (or client closes?)
-      // TODO: how to tell if client ends connections? read error too?
-      if (persistent && !pipeOpen) {
-        pipeOpen = true;
-
-        pid = fork();
-        if (pid < 0) {
-          fprintf(stderr, "Fork failed\n");
-          // TODO: exit or _exit?
-          _exit(1);
-
-        } else if (pid == 0) {
-          readResponse(serverfd, connfd);
-          _exit(0);
+  // fork a new process to receive and send HTTP requests from the client
+  // and keep main process to receive HTTP responses from server
+  try {
+    do {
+        const char* reqString = readRequest(connfd);
+        if (reqString == NULL) {
+          // We are done reading requests for the client
+          // wait for children
+          break;
         }
-      } else if (!persistent) {
-        readResponse(serverfd, connfd);
-      }
-      // } else if (pipeOpen) {
-      //   // see if child is done?
-      //   int status;
-      //   pid_t wpid = waitpid(-1, &status, WNOHANG);
-      //   if (wpid > 0 && WIFEXITED(status)) {
-      //     fprintf(stderr, "Closing connections...\n");
-      //     close(serverfd);
-      //     close(connfd);
-      //     _exit(0);
-      //   }
-      // }
+        req.ParseRequest(reqString, strlen(reqString));
+
+        persistent = req.GetVersion() == "1.1";
+
+        if (!connectionOpen) {
+          serverfd = openConnectionWith(req);
+          fprintf(stderr, "Server fd is %d\n", serverfd);
+          connectionOpen = true;
+        }
+
+        sendRequest(req, serverfd);
+
+        if (pid < 0) {
+          pid = fork();
+          if (pid < 0) {
+            fprintf(stderr, "Fork failed\n");
+            break;
+          } else if (pid == 0) {
+            readResponse(serverfd, connfd);
+            fprintf(stderr, "Done reading responses for %d\n", serverfd);
+            fprintf(stderr, "Closing connection to server/client...%d\n", serverfd);
+            close(serverfd);
+            close(connfd);
+            _exit(0);
+          }
+        } else {
+          int status;
+          waitpid(pid, &status, WNOHANG);
+          if (WIFEXITED(status)) {
+            break;
+          }
+        }
+      } while(persistent);
+
     } catch (ParseException e) {
-      // Bad request, send appropriate error & close the connection
-      string response;
-      string not_implemented = "Request is not GET";
-      fprintf(stderr, "%s\n", e.what());
+    // Bad request, send appropriate error & close the connection?
+    string response;
+    string not_implemented = "Request is not GET";
+    fprintf(stderr, "%s\n", e.what());
 
-      if (strcmp(e.what(), not_implemented.c_str()) == 0) {
-        response = "501 Not Implemented\r\n\r\n";
-      } else {
-        response = "400 Bad Request\r\n\r\n";
-      }
-
-      write(connfd, response.c_str(), response.length());
+    if (strcmp(e.what(), not_implemented.c_str()) == 0) {
+      response = "501 Not Implemented\r\n\r\n";
+    } else {
+      response = "400 Bad Request\r\n\r\n";
     }
 
-  } while(persistent);
+    write(connfd, response.c_str(), response.length());
+  }
 
-    // resp.ParseResponse(response.c_str(), response.length());
-
-  fprintf(stderr, "Closing connections...\n");
+  fprintf(stderr, "Closing connection to server/client...%d\n", serverfd);
   close(serverfd);
   close(connfd);
   _exit(0);
@@ -272,25 +269,51 @@ char* getHostIP(string hostname) {
 /**
  * Reads the response from the server
  * TODO: figure out better way to detect end of HTTP response?
+ * What if server sends malformed response? // timeout for receiving a response
+ * timeout @ 5 seconds -> check if we have a response return if we do
+ * timeout @ 10 seconds -> return
  */
 string readResponse(int serverfd, int clientfd) {
+  fprintf(stderr, "Attempting to read response from %d\n", serverfd);
   string buffer;
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
 
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(serverfd, &readfds);
+    struct timeval timeout;
+        timeout.tv_sec = 2;
+        timeout.tv_usec = 0;
+    select(serverfd+1, &readfds, NULL, NULL, &timeout);
+
+    if (!FD_ISSET(serverfd, &readfds)) {
+      fprintf(stderr, "Read response 1st time out for %d\n", serverfd);
+      HttpResponse resp;
+      try {
+        resp.ParseResponse(buffer.c_str(), buffer.length());
+        fprintf(stderr, "Response complete %d\n", serverfd);
+        return buffer;
+      } catch (ParseException e) {
+        // if we don't have a full response, wait for read itself to timeout
+      }
+    }
+
     int numBytes = read(serverfd, buf, sizeof(buf));
 
     if ( numBytes < 0) {
-      fprintf(stderr, "Read error\n");
-      _exit(1);
+      fprintf(stderr, "Read response error or timeout\n");
+      return buffer;
     } else if (numBytes == 0) {
+      fprintf(stderr, "Num bytes read was 0\n");
       break;
     } else {
+      write(2, buf, numBytes);
       write(clientfd, buf, numBytes);
     }
+    buffer.append(buf);
   }
-  fprintf(stderr, "Done reading response\n");
   return buffer;
 }
 
@@ -306,10 +329,11 @@ const char* readRequest(int connfd) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
     if (read(connfd, buf, sizeof(buf) - 1) < 0) {
-      fprintf(stderr, "Read error\n");
+      fprintf(stderr, "Read request error\n");
       // TODO: Check errno, due to timeout?
       return NULL;
     } else {
+      write(2, buf, sizeof(buf));
       buffer.append(buf);
     }
   }
