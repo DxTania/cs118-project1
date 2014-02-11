@@ -38,6 +38,7 @@ You should be able to send an HTTP request and get a response.
 * Connections that could possibly be waiting, are they queued or auto acepted?
 * Close persistent connections after some timeout, is this usual way?
 * What is the persistent connection test looking for? immediate closing after 1st test?
+* are we supposed to support Connection: close header?
 
 Right now, we pass basic object fetching.
 Persistent connection test passes if we delete the basic object fetching code.. better than nothing?  =/
