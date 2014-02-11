@@ -23,6 +23,9 @@ using namespace std;
 string readRequest(int connfd);
 string readResponse(int connfd);
 
+int openConnectionWith(HttpRequest req);
+string sendRequest (HttpRequest req, int sockfd);
+
 void recordChild(pid_t pid, bool record);
 void waitForClient();
 void acceptClient(int connfd);
@@ -79,12 +82,7 @@ int main(void) {
   return 0;
 }
 
-/**
- * TODO: Finish this
- * Attempts to send the request and retrieve a response
- * Using a cache - HTTP Conditional Get
- */
-string sendRequest (HttpRequest req) {
+int openConnectionWith(HttpRequest req) {
   // More socket fun :D
   struct sockaddr_in remote_addr;
   memset(&remote_addr, 0, sizeof(remote_addr));
@@ -123,6 +121,17 @@ string sendRequest (HttpRequest req) {
     fprintf(stderr, "Failed to connect to remote server\n");
     exit(1);
   }
+
+  return sockfd;
+}
+
+/**
+ * TODO: Finish this
+ * Attempts to send the request and retrieve a response
+ * Using a cache - HTTP Conditional Get
+ */
+string sendRequest (HttpRequest req, int sockfd) {
+
 
   // TODO: Include If-Modified-Since header with cached date
   // If not cached, send request without the If-Modified-Since header
@@ -166,7 +175,9 @@ void acceptClient(int connfd) {
 
   try {
     req.ParseRequest(reqString.c_str(), reqString.length());
-    string response = sendRequest(req);
+
+    int serverfd = openConnectionWith(req);
+    string response = sendRequest(req, serverfd);
     write(connfd, response.c_str(), response.length());
 
   } catch (ParseException e) {
