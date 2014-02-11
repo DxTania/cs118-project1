@@ -24,7 +24,7 @@ string readRequest(int connfd);
 string readResponse(int connfd);
 
 int openConnectionWith(HttpRequest req);
-string sendRequest (HttpRequest req, int sockfd);
+void sendRequest (HttpRequest req, int sockfd);
 
 void recordChild(pid_t pid, bool record);
 void waitForClient();
@@ -130,7 +130,7 @@ int openConnectionWith(HttpRequest req) {
  * Attempts to send the request and retrieve a response
  * Using a cache - HTTP Conditional Get
  */
-string sendRequest (HttpRequest req, int sockfd) {
+void sendRequest (HttpRequest req, int sockfd) {
 
 
   // TODO: Include If-Modified-Since header with cached date
@@ -152,17 +152,7 @@ string sendRequest (HttpRequest req, int sockfd) {
   fprintf(stderr, "Writing request to server\n%s", buf);
   write(sockfd, buf, bufsize);
 
-  // Wait for response from the server
-  HttpResponse resp;
-  string answer = readResponse(sockfd);
-  resp.ParseResponse(answer.c_str(), answer.length());
-
-  // Cache the response if needed
-
-  close(sockfd);
   free(buf);
-
-  return answer;
 }
 
 /**
@@ -177,7 +167,14 @@ void acceptClient(int connfd) {
     req.ParseRequest(reqString.c_str(), reqString.length());
 
     int serverfd = openConnectionWith(req);
-    string response = sendRequest(req, serverfd);
+
+    sendRequest(req, serverfd);
+
+    // Wait for response from the server and send back to client
+    HttpResponse resp;
+    string response = readResponse(serverfd);
+    resp.ParseResponse(response.c_str(), response.length());
+
     write(connfd, response.c_str(), response.length());
 
   } catch (ParseException e) {
