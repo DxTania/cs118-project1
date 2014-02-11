@@ -18,8 +18,11 @@
 using namespace std;
 
 #define MAXPROCESSES 2
+#define PORTNUM 15886
 
-string readFromSocket(int connfd);
+string readRequest(int connfd);
+string readResponse(int connfd);
+
 void recordChild(pid_t pid, bool record);
 void waitForClient();
 void acceptClient(int connfd);
@@ -127,7 +130,7 @@ string sendRequest (HttpRequest req) {
   req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
   // Set up request for that server
-  size_t bufsize = sizeof(char) * req.GetTotalLength();
+  size_t bufsize = sizeof(char) * (req.GetTotalLength() + 1);
   char* buf = (char*) malloc(bufsize);
   if (buf == NULL) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
@@ -142,11 +145,8 @@ string sendRequest (HttpRequest req) {
 
   // Wait for response from the server
   HttpResponse resp;
-  string answer = readFromSocket(sockfd);
+  string answer = readResponse(sockfd);
   resp.ParseResponse(answer.c_str(), answer.length());
-
-  fprintf(stderr, "Details about the response:\n");
-  fprintf(stderr, "%s\n", answer.c_str());
 
   // Cache the response if needed
 
@@ -162,7 +162,7 @@ string sendRequest (HttpRequest req) {
  */
 void acceptClient(int connfd) {
   HttpRequest req;
-  string reqString = readFromSocket(connfd);
+  string reqString = readRequest(connfd);
 
   try {
     req.ParseRequest(reqString.c_str(), reqString.length());
@@ -204,13 +204,30 @@ char* getHostIP(string hostname) {
   return inet_ntoa(*ip_addrs[0]);
 }
 
+string readResponse(int connfd) {
+  string buffer;
+  while (true) {
+    char buf[1025];
+    memset(&buf, 0, sizeof(buf));
+    int numBytes = read(connfd, buf, sizeof(buf) - 1);
+    if ( numBytes < 0) {
+      fprintf(stderr, "Read error\n");
+    } else if (numBytes == 0) {
+      break;
+    } else {
+      buffer.append(buf);
+    }
+  }
+  return buffer;
+}
+
 /**
  * Reads the request from the current client connection until
  * we receive the substring which ends HTTP requests \r\n\r\n
  *
  * @return The entire request we read
  */
-string readFromSocket(int connfd) {
+string readRequest(int connfd) {
   string buffer;
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL) {
     char buf[1025];
@@ -218,7 +235,6 @@ string readFromSocket(int connfd) {
     if (read(connfd, buf, sizeof(buf) - 1) < 0) {
       fprintf(stderr, "Read error\n");
     } else {
-      buf[sizeof(buf) - 1] = 0;
       buffer.append(buf);
     }
   }
@@ -256,7 +272,7 @@ int setupServer(struct sockaddr_in server_addr) {
 
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_addr.sin_port = htons(14886);
+  server_addr.sin_port = htons(PORTNUM);
 
   // TODO: Testing only? Allow reuse of socket quickly after we close it
   setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
