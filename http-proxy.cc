@@ -17,10 +17,10 @@
 
 using namespace std;
 
-#define MAXPROCESSES 2
+#define MAXPROCESSES 3
 #define PORTNUM 15886
 
-string readRequest(int connfd);
+const char* readRequest(int connfd);
 string readResponse(int serverfd, int clientfd);
 
 int openConnectionWith(HttpRequest req);
@@ -57,6 +57,15 @@ int main(void) {
 
       connfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_size);
 
+      // Set timeout for persistent connection closing
+      // TODO:  a better way?
+      struct timeval timeout;
+      timeout.tv_sec = 10;
+      timeout.tv_usec = 0;
+
+      setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                  sizeof(timeout));
+
       // Fork a process to take care of the client
       pid_t pid = fork();
       if (pid < 0) {
@@ -82,6 +91,11 @@ int main(void) {
   return 0;
 }
 
+/**
+ * Creates a connection to the server the HTTP request is asking for
+ *
+ * @return The socket file descriptor to the server
+ */
 int openConnectionWith(HttpRequest req) {
   // More socket fun :D
   struct sockaddr_in remote_addr;
@@ -126,8 +140,7 @@ int openConnectionWith(HttpRequest req) {
 }
 
 /**
- * TODO: Finish this
- * Attempts to send the request and retrieve a response
+ * Attempts to send the request through the specified socket
  * Using a cache - HTTP Conditional Get
  */
 void sendRequest (HttpRequest req, int sockfd) {
@@ -146,7 +159,6 @@ void sendRequest (HttpRequest req, int sockfd) {
   req.FormatRequest(buf);
 
   // Write the request to the server & free buffer
-  write(2, buf, bufsize-1);
   write(sockfd, buf, bufsize-1);
   free(buf);
 }
@@ -154,6 +166,7 @@ void sendRequest (HttpRequest req, int sockfd) {
 /**
  * Child process only:
  * Attempt to process the client's HTTP request
+ * May fork a new process to implement pipelining
  */
 void acceptClient(int connfd) {
   HttpRequest req;
@@ -161,11 +174,18 @@ void acceptClient(int connfd) {
   bool persistent = false;
   bool connectionOpen = false, pipeOpen = false;
   int serverfd;
+  pid_t pid;
 
   do {
     try {
-      string reqString = readRequest(connfd);
-      req.ParseRequest(reqString.c_str(), reqString.length());
+      const char* reqString = readRequest(connfd);
+
+      if (reqString == NULL) {
+        // TODO: wait for child to possibly read/write a response?
+        break;
+      }
+
+      req.ParseRequest(reqString, strlen(reqString));
 
       persistent = req.GetVersion() == "1.1";
 
@@ -176,21 +196,36 @@ void acceptClient(int connfd) {
 
       sendRequest(req, serverfd);
 
-      // Wait for response from the server and send back to client
+      // If persistent HTTP/1.1, we fork a new process to handle all the reading
+      // And we keep accepting requests until a timeout (or client closes?)
+      // TODO: how to tell if client ends connections? read error too?
       if (persistent && !pipeOpen) {
-        pid_t pid = fork();
+        pipeOpen = true;
+
+        pid = fork();
         if (pid < 0) {
           fprintf(stderr, "Fork failed\n");
-          exit(1);
+          // TODO: exit or _exit?
+          _exit(1);
 
         } else if (pid == 0) {
           readResponse(serverfd, connfd);
           _exit(0);
         }
-        pipeOpen = true;
       } else if (!persistent) {
         readResponse(serverfd, connfd);
       }
+      // } else if (pipeOpen) {
+      //   // see if child is done?
+      //   int status;
+      //   pid_t wpid = waitpid(-1, &status, WNOHANG);
+      //   if (wpid > 0 && WIFEXITED(status)) {
+      //     fprintf(stderr, "Closing connections...\n");
+      //     close(serverfd);
+      //     close(connfd);
+      //     _exit(0);
+      //   }
+      // }
     } catch (ParseException e) {
       // Bad request, send appropriate error & close the connection
       string response;
@@ -218,6 +253,7 @@ void acceptClient(int connfd) {
 
 /**
  * Attempts to get an IP address for the provided hostname
+ *
  * @return The IP address if found, NULL otherwise
  */
 char* getHostIP(string hostname) {
@@ -235,11 +271,10 @@ char* getHostIP(string hostname) {
 
 /**
  * Reads the response from the server
- * TODO: figure out how to detect end of HTTP response
+ * TODO: figure out better way to detect end of HTTP response?
  */
 string readResponse(int serverfd, int clientfd) {
   string buffer;
-  fprintf(stderr, "Response:\n");
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
@@ -248,11 +283,10 @@ string readResponse(int serverfd, int clientfd) {
 
     if ( numBytes < 0) {
       fprintf(stderr, "Read error\n");
-      exit(1);
+      _exit(1);
     } else if (numBytes == 0) {
       break;
     } else {
-      write(2, buf, numBytes);
       write(clientfd, buf, numBytes);
     }
   }
@@ -264,20 +298,22 @@ string readResponse(int serverfd, int clientfd) {
  * Reads the request from the current client connection until
  * we receive the substring which ends HTTP requests \r\n\r\n
  *
- * @return The entire request we read
+ * @return The entire request we read, NULL if client has timed out
  */
-string readRequest(int connfd) {
+const char* readRequest(int connfd) {
   string buffer;
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
     if (read(connfd, buf, sizeof(buf) - 1) < 0) {
       fprintf(stderr, "Read error\n");
+      // TODO: Check errno, due to timeout?
+      return NULL;
     } else {
       buffer.append(buf);
     }
   }
-  return buffer;
+  return buffer.c_str();
 }
 
 /**
@@ -334,6 +370,7 @@ int setupServer(struct sockaddr_in server_addr) {
  * and unrecords the child process from our table
  *
  * TODO: Error handling for children that don't exit correctly
+ * TODO: make sure all children actually exit at appropriate times
  */
 void waitForClient() {
   int status;

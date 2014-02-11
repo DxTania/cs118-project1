@@ -25,7 +25,7 @@ First run the proxy server, then run the following telnet command
 telnet 127.0.0.1 14886
 ```
 
-You should be able to send an HTTP request and get a response (in the end), I added a file called carraige returns that can be copy and pasted into telnet to actually send a request.
+You should be able to send an HTTP request and get a response.
 
 ## TODO:
 
@@ -35,6 +35,9 @@ You should be able to send an HTTP request and get a response (in the end), I ad
   - Only cache if Cache-Control is not private?
   - If we get Not Modified, return cache result to user
   - Otherwise we update the cache and return that result to user
-  - Also: Support both persistent & non-persistent connections
-* Connections that could possibly be waiting, are they queued?
-* Close persistent connections after some timeout?
+* Connections that could possibly be waiting, are they queued or auto acepted?
+* Close persistent connections after some timeout, is this usual way?
+* What is the persistent connection test looking for? immediate closing after 1st test?
+
+Right now, we pass basic object fetching.
+Persistent connection test passes if we delete the basic object fetching code.. better than nothing?  =/
