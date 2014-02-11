@@ -21,7 +21,7 @@ using namespace std;
 #define PORTNUM 15886
 
 string readRequest(int connfd);
-string readResponse(int connfd);
+string readResponse(int serverfd, int clientfd);
 
 int openConnectionWith(HttpRequest req);
 void sendRequest (HttpRequest req, int sockfd);
@@ -131,26 +131,25 @@ int openConnectionWith(HttpRequest req) {
  * Using a cache - HTTP Conditional Get
  */
 void sendRequest (HttpRequest req, int sockfd) {
-
-
   // TODO: Include If-Modified-Since header with cached date
   // If not cached, send request without the If-Modified-Since header
   // Do not cache if cache-control is private (or no-cache?)
-  req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
+  // req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
   // Set up request for that server
-  size_t bufsize = sizeof(char) * (req.GetTotalLength() + 1);
+  size_t bufsize = req.GetTotalLength() + 1;
   char* buf = (char*) malloc(bufsize);
   if (buf == NULL) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
     exit(1);
   }
-  memset(buf, 0, bufsize);
+  // memset(buf, 0, bufsize);
   req.FormatRequest(buf);
 
+  // string test = "GET / HTTP/1.1\r\nHost: www.google.com\r\n\r\n";
   // Write the request to the server
-  fprintf(stderr, "Writing request to server\n%s", buf);
-  write(sockfd, buf, bufsize);
+  write(sockfd, buf, bufsize-1);
+  // write(sockfd, buf, bufsize);
 
   free(buf);
 }
@@ -171,11 +170,24 @@ void acceptClient(int connfd) {
     sendRequest(req, serverfd);
 
     // Wait for response from the server and send back to client
-    HttpResponse resp;
-    string response = readResponse(serverfd);
-    resp.ParseResponse(response.c_str(), response.length());
+    // HttpResponse resp;
+    pid_t pid = fork();
+    if (pid == 0) {
+      readResponse(serverfd, connfd);
+      _exit(0);
+    }
+    // resp.ParseResponse(response.c_str(), response.length());
 
-    write(connfd, response.c_str(), response.length());
+    // write(connfd, response.c_str(), response.length());
+
+    // Try again
+    // write(connfd, "Try number two", 15);
+
+    // sendRequest(req, serverfd);
+    // string response2 = readResponse(serverfd);
+
+    // write(connfd, response2.c_str(), response2.length());
+
 
   } catch (ParseException e) {
     // Bad request, send appropriate error & close the connection
@@ -212,18 +224,21 @@ char* getHostIP(string hostname) {
   return inet_ntoa(*ip_addrs[0]);
 }
 
-string readResponse(int connfd) {
+string readResponse(int serverfd, int clientfd) {
   string buffer;
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
-    int numBytes = read(connfd, buf, sizeof(buf) - 1);
+
+    int numBytes = read(serverfd, buf, sizeof(buf));
+
     if ( numBytes < 0) {
       fprintf(stderr, "Read error\n");
+      exit(1);
     } else if (numBytes == 0) {
       break;
     } else {
-      buffer.append(buf);
+      write(clientfd, buf, sizeof(buf));
     }
   }
   return buffer;
@@ -306,7 +321,18 @@ int setupServer(struct sockaddr_in server_addr) {
  */
 void waitForClient() {
   int status;
-  pid_t pid = waitpid(-1, &status, 0);
+  int found = false;
+  pid_t pid;
+
+  while(!found) {
+    pid = waitpid(-1, &status, 0);
+    for(int i = 0; i < MAXPROCESSES; i++) {
+      if (pids[i] == pid) {
+        found = true;
+      }
+    }
+  }
+
   if (pid > 0 && WIFEXITED(status)) {
     recordChild(pid, false);
   }
