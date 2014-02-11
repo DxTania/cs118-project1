@@ -143,14 +143,11 @@ void sendRequest (HttpRequest req, int sockfd) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
     exit(1);
   }
-  // memset(buf, 0, bufsize);
   req.FormatRequest(buf);
 
-  // string test = "GET / HTTP/1.1\r\nHost: www.google.com\r\n\r\n";
-  // Write the request to the server
+  // Write the request to the server & free buffer
+  write(2, buf, bufsize-1);
   write(sockfd, buf, bufsize-1);
-  // write(sockfd, buf, bufsize);
-
   free(buf);
 }
 
@@ -160,49 +157,61 @@ void sendRequest (HttpRequest req, int sockfd) {
  */
 void acceptClient(int connfd) {
   HttpRequest req;
-  string reqString = readRequest(connfd);
 
-  try {
-    req.ParseRequest(reqString.c_str(), reqString.length());
+  bool persistent = false;
+  bool connectionOpen = false, pipeOpen = false;
+  int serverfd;
 
-    int serverfd = openConnectionWith(req);
+  do {
+    try {
+      string reqString = readRequest(connfd);
+      req.ParseRequest(reqString.c_str(), reqString.length());
 
-    sendRequest(req, serverfd);
+      persistent = req.GetVersion() == "1.1";
 
-    // Wait for response from the server and send back to client
-    // HttpResponse resp;
-    pid_t pid = fork();
-    if (pid == 0) {
-      readResponse(serverfd, connfd);
-      _exit(0);
+      if (!connectionOpen) {
+        serverfd = openConnectionWith(req);
+        connectionOpen = true;
+      }
+
+      sendRequest(req, serverfd);
+
+      // Wait for response from the server and send back to client
+      if (persistent && !pipeOpen) {
+        pid_t pid = fork();
+        if (pid < 0) {
+          fprintf(stderr, "Fork failed\n");
+          exit(1);
+
+        } else if (pid == 0) {
+          readResponse(serverfd, connfd);
+          _exit(0);
+        }
+        pipeOpen = true;
+      } else if (!persistent) {
+        readResponse(serverfd, connfd);
+      }
+    } catch (ParseException e) {
+      // Bad request, send appropriate error & close the connection
+      string response;
+      string not_implemented = "Request is not GET";
+      fprintf(stderr, "%s\n", e.what());
+
+      if (strcmp(e.what(), not_implemented.c_str()) == 0) {
+        response = "501 Not Implemented\r\n\r\n";
+      } else {
+        response = "400 Bad Request\r\n\r\n";
+      }
+
+      write(connfd, response.c_str(), response.length());
     }
+
+  } while(persistent);
+
     // resp.ParseResponse(response.c_str(), response.length());
 
-    // write(connfd, response.c_str(), response.length());
-
-    // Try again
-    // write(connfd, "Try number two", 15);
-
-    // sendRequest(req, serverfd);
-    // string response2 = readResponse(serverfd);
-
-    // write(connfd, response2.c_str(), response2.length());
-
-
-  } catch (ParseException e) {
-    // Bad request, send appropriate error & close the connection
-    string response;
-    string not_implemented = "Request is not GET";
-    fprintf(stderr, "%s\n", e.what());
-
-    if (strcmp(e.what(), not_implemented.c_str()) == 0) {
-      response = "501 Not Implemented\r\n\r\n";
-    } else {
-      response = "400 Bad Request\r\n\r\n";
-    }
-
-    write(connfd, response.c_str(), response.length());
-  }
+  fprintf(stderr, "Closing connections...\n");
+  close(serverfd);
   close(connfd);
   _exit(0);
 }
@@ -224,8 +233,13 @@ char* getHostIP(string hostname) {
   return inet_ntoa(*ip_addrs[0]);
 }
 
+/**
+ * Reads the response from the server
+ * TODO: figure out how to detect end of HTTP response
+ */
 string readResponse(int serverfd, int clientfd) {
   string buffer;
+  fprintf(stderr, "Response:\n");
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
@@ -238,9 +252,11 @@ string readResponse(int serverfd, int clientfd) {
     } else if (numBytes == 0) {
       break;
     } else {
-      write(clientfd, buf, sizeof(buf));
+      write(2, buf, numBytes);
+      write(clientfd, buf, numBytes);
     }
   }
+  fprintf(stderr, "Done reading response\n");
   return buffer;
 }
 

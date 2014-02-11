@@ -37,3 +37,4 @@ You should be able to send an HTTP request and get a response (in the end), I ad
   - Otherwise we update the cache and return that result to user
   - Also: Support both persistent & non-persistent connections
 * Connections that could possibly be waiting, are they queued?
+* Close persistent connections after some timeout?
