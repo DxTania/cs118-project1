@@ -166,7 +166,6 @@ server2 = ServerThread(int(sport2))
 server1.start()
 server2.start()
 
-
 client1 = ClientThread("127.0.0.1:" + pport, "http://127.0.0.1:" + sport1 + "/basic", "./basic")
 client1.start()
 client1.join()

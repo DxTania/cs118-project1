@@ -17,7 +17,7 @@
 
 using namespace std;
 
-#define MAXPROCESSES 3
+#define MAXPROCESSES 20
 #define PORTNUM 15886
 
 const char* readRequest(int connfd);
@@ -60,7 +60,7 @@ int main(void) {
       // Set timeout for persistent connection closing
       // TODO:  a better way?
       struct timeval timeout;
-      timeout.tv_sec = 15;
+      timeout.tv_sec = 20;
       timeout.tv_usec = 0;
 
       setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
@@ -180,7 +180,7 @@ void acceptClient(int connfd) {
 
   bool persistent = false;
   bool connectionOpen = false;
-  int serverfd;
+  int serverfd = -1;
   pid_t pid = -1;
 
   // fork a new process to receive and send HTTP requests from the client
@@ -199,7 +199,6 @@ void acceptClient(int connfd) {
 
         if (!connectionOpen) {
           serverfd = openConnectionWith(req);
-          fprintf(stderr, "Server fd is %d\n", serverfd);
           connectionOpen = true;
         }
 
@@ -212,10 +211,6 @@ void acceptClient(int connfd) {
             break;
           } else if (pid == 0) {
             readResponse(serverfd, connfd);
-            fprintf(stderr, "Done reading responses for %d\n", serverfd);
-            fprintf(stderr, "Closing connection to server/client...%d\n", serverfd);
-            close(serverfd);
-            close(connfd);
             _exit(0);
           }
         } else {
@@ -242,7 +237,6 @@ void acceptClient(int connfd) {
     write(connfd, response.c_str(), response.length());
   }
 
-  fprintf(stderr, "Closing connection to server/client...%d\n", serverfd);
   close(serverfd);
   close(connfd);
   _exit(0);
@@ -274,7 +268,6 @@ char* getHostIP(string hostname) {
  * timeout @ 10 seconds -> return
  */
 string readResponse(int serverfd, int clientfd) {
-  fprintf(stderr, "Attempting to read response from %d\n", serverfd);
   string buffer;
   while (true) {
     char buf[1025];
@@ -284,32 +277,27 @@ string readResponse(int serverfd, int clientfd) {
     FD_ZERO(&readfds);
     FD_SET(serverfd, &readfds);
     struct timeval timeout;
-        timeout.tv_sec = 2;
+        timeout.tv_sec = 1;
         timeout.tv_usec = 0;
     select(serverfd+1, &readfds, NULL, NULL, &timeout);
 
     if (!FD_ISSET(serverfd, &readfds)) {
-      fprintf(stderr, "Read response 1st time out for %d\n", serverfd);
       HttpResponse resp;
       try {
         resp.ParseResponse(buffer.c_str(), buffer.length());
-        fprintf(stderr, "Response complete %d\n", serverfd);
         return buffer;
       } catch (ParseException e) {
-        // if we don't have a full response, wait for read itself to timeout
+        // If we don't have a full response, wait for read itself to timeout
       }
     }
 
     int numBytes = read(serverfd, buf, sizeof(buf));
-
-    if ( numBytes < 0) {
-      fprintf(stderr, "Read response error or timeout\n");
+    if (numBytes < 0) {
+      // TODO: check errno, due to timeout?
       return buffer;
     } else if (numBytes == 0) {
-      fprintf(stderr, "Num bytes read was 0\n");
       break;
     } else {
-      write(2, buf, numBytes);
       write(clientfd, buf, numBytes);
     }
     buffer.append(buf);
@@ -328,12 +316,14 @@ const char* readRequest(int connfd) {
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
-    if (read(connfd, buf, sizeof(buf) - 1) < 0) {
-      fprintf(stderr, "Read request error\n");
+    int numBytes = read(connfd, buf, sizeof(buf) -1);
+    if (numBytes < 0) {
+      fprintf(stderr, "Read request error or timeout\n");
       // TODO: Check errno, due to timeout?
       return NULL;
+    } else if (numBytes == 0) {
+      break;
     } else {
-      write(2, buf, sizeof(buf));
       buffer.append(buf);
     }
   }
@@ -395,6 +385,8 @@ int setupServer(struct sockaddr_in server_addr) {
  *
  * TODO: Error handling for children that don't exit correctly
  * TODO: make sure all children actually exit at appropriate times
+ *
+ * TODO: Does this screw up waitpid for acceptClient?
  */
 void waitForClient() {
   int status;
