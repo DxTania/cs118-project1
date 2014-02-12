@@ -17,7 +17,7 @@
 
 using namespace std;
 
-#define MAXPROCESSES 20
+#define MAXPROCESSES 5
 #define PORTNUM 15886
 
 const char* readRequest(int connfd);
@@ -164,6 +164,7 @@ void sendRequest (HttpRequest req, int sockfd) {
   req.FormatRequest(buf);
 
   // Write the request to the server & free buffer
+  write(2, buf, bufsize-1);
   write(sockfd, buf, bufsize-1);
   free(buf);
 }
@@ -171,67 +172,72 @@ void sendRequest (HttpRequest req, int sockfd) {
 /**
  * Child process only:
  * Attempt to process the client's HTTP request
- * Forks a new process every time we expect a response
+ * Forks a new process to read responses
  */
 void acceptClient(int connfd) {
-  HttpRequest req;
-
   bool persistent = false;
   bool connectionOpen = false;
+  bool shouldClose = false;
   int serverfd = -1;
   pid_t pid = -1;
 
-  try {
-    do {
-        const char* reqString = readRequest(connfd);
-        if (reqString == NULL) {
-          // We are done reading requests for the client
-          // TODO: wait for children reading responses?
-          break;
-        } else if (strlen(reqString) != 0) {
-          req.ParseRequest(reqString, strlen(reqString));
-          persistent = req.GetVersion() == "1.1";
+  do {
+    const char* reqString = readRequest(connfd);
+    if (reqString == NULL) {
+      // We are done reading requests for the client
+      // TODO: wait for children reading responses?
+      break;
+    } else if (strlen(reqString) != 0) {
+      try {
+        HttpRequest req;
+        // fprintf(stderr, "Attempting to parse:%s<<", reqString);
+        req.ParseRequest(reqString, strlen(reqString));
 
-          if (!connectionOpen) {
-            serverfd = openConnectionWith(req);
-            connectionOpen = true;
-          }
-          sendRequest(req, serverfd);
+        persistent = req.GetVersion() == "1.1";
+        shouldClose = req.FindHeader("Connection").compare("close") == 0;
+
+        if (!connectionOpen) {
+          serverfd = openConnectionWith(req);
+          connectionOpen = true;
         }
+        sendRequest(req, serverfd);
 
-        if (pid < 0) {
-          pid = fork();
-          if (pid < 0) {
-            fprintf(stderr, "Fork failed\n");
-            break;
-          } else if (pid == 0) {
-            readResponse(serverfd, connfd);
-            _exit(0);
-          }
+      } catch (ParseException e) {
+        fprintf(stderr, "Exception while parsing %s\n", e.what());
+        string response;
+        string not_implemented = "Request is not GET";
+        fprintf(stderr, "%s\n", e.what());
+
+        if (strcmp(e.what(), not_implemented.c_str()) == 0) {
+          response = "501 Not Implemented\r\n\r\n";
         } else {
-          int status;
-          waitpid(pid, &status, WNOHANG);
-          if (WIFEXITED(status)) {
-            break;
-          }
+          response = "400 Bad Request\r\n\r\n";
         }
-      } while(persistent);
 
-    } catch (ParseException e) {
-    // Bad request, send appropriate error & close the connection?
-    string response;
-    string not_implemented = "Request is not GET";
-    fprintf(stderr, "%s\n", e.what());
-
-    if (strcmp(e.what(), not_implemented.c_str()) == 0) {
-      response = "501 Not Implemented\r\n\r\n";
-    } else {
-      response = "400 Bad Request\r\n\r\n";
+        write(connfd, response.c_str(), response.length());
+        shouldClose = true;
+      }
     }
 
-    write(connfd, response.c_str(), response.length());
-  }
+    if (pid < 0) {
+      pid = fork();
+      if (pid < 0) {
+        fprintf(stderr, "Fork failed\n");
+        break;
+      } else if (pid == 0) {
+        readResponse(serverfd, connfd);
+        _exit(0);
+      }
+    } else {
+      int status;
+      waitpid(pid, &status, WNOHANG);
+      if (WIFEXITED(status)) {
+        break;
+      }
+    }
+  } while(persistent && !shouldClose);
 
+  fprintf(stderr, "Closing connections %d/%d\n", serverfd, connfd);
   close(serverfd);
   close(connfd);
   _exit(0);
@@ -257,7 +263,6 @@ char* getHostIP(string hostname) {
 
 /**
  * Reads the response from the server
- * What if server sends malformed response? // timeout for receiving a response
  * timeout @ 2 seconds -> check if we have a response return if we do
  * timeout @ 10 seconds -> return
  */
@@ -292,6 +297,7 @@ string readResponse(int serverfd, int clientfd) {
     } else if (numBytes == 0) {
       break;
     } else {
+      write(2, buf, numBytes);
       write(clientfd, buf, numBytes);
     }
     buffer.append(buf);
