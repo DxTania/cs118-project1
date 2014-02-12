@@ -30,37 +30,28 @@ You should be able to send an HTTP request and get a response.
 ## TODO:
 
 * Caching
-  - Figure out what to store cache in
-  - Send If-Modified-Since headers
-  - Only cache if Cache-Control is not private?
-  - If we get Not Modified, return cache result to user
-  - Otherwise we update the cache and return that result to user
-* Connections that could possibly be waiting, are they queued or auto acepted?
-* Are we supposed to support Connection: close header?
+  - If we get a request
+    -- If the request exists in the cache
+        Check the response for Last-Modified
+        Send request to server with If-Modified-Since header
+        If we get 304 Not Modified
+          return Response in cache to client
+        Else
+          return Response to client and update cache
+    -- Else
+        Send the request to server
+        Check the response header for Cache-control or similar
+        If we can cache the response
+          update cache
+        Else
+          Just return the response to the client
+* Queued connections, are they taken care of?
 * Persistent connection to us, if requesting files from diff site we need to open new connections? (can clients ask for files from diff sites in same connection?)
 * Other random TODOs in http-proxy.cc
 
 Passes first three tests! Basic object fetching, persistent connection, and concurrent connections.
 
 
-### Ideas:
+Will have to devise a method of determining when the server is done sending a response in the relayResponse() method as well as implement checking the
+response for 304 not modified, and implement sending If-Modified-Since in sendRequest.
 
-
-### Timeouts and waiting:
-```
-fd_set readfds;
-FD_ZERO(&readfds);
-FD_SET(serverfd, &readfds);
-struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-select(serverfd+1, &readfds, NULL, NULL, &timeout);
-```
-```
-struct timeval timeout;
-timeout.tv_sec = 2;
-timeout.tv_usec = 0;
-
-setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
-            sizeof(timeout));
-```
