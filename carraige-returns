@@ -1,7 +1,0 @@
-GET http://www.ucla.edu/ HTTP/1.1
-
-GET /intl/en_ALL/images/logo.gif HTTP/1.1
-Host: www.google.com
-If-Modified-Since: Wed, 29 Jan 2014 19:38:24 GMT
-
-
