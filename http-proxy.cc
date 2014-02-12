@@ -24,7 +24,7 @@ using namespace std;
 
 string readRequest(int connfd);
 void relayResponse(int serverfd, int clientfd);
-int openConnectionWith(HttpRequest req);
+int openConnectionFor(HttpRequest req);
 void sendRequest (HttpRequest req, int sockfd);
 void recordChild(pid_t pid, bool record);
 void waitForClient();
@@ -64,7 +64,7 @@ int main(void) {
       connfd = accept(listenfd, (struct sockaddr*) &client_addr,
         &client_size);
 
-      // Set timeout for persistent connection closing
+      // Set timeout for persistent connection closing to client
       struct timeval timeout;
       timeout.tv_sec = 20;
       timeout.tv_usec = 0;
@@ -101,7 +101,7 @@ int main(void) {
  *
  * @return The socket file descriptor to the server
  */
-int openConnectionWith(HttpRequest req) {
+int openConnectionFor(HttpRequest req) {
   // More socket fun :D
   struct sockaddr_in remote_addr;
   memset(&remote_addr, 0, sizeof(remote_addr));
@@ -123,8 +123,6 @@ int openConnectionWith(HttpRequest req) {
   if (ip == NULL) {
     fprintf(stderr, "Invalid host name\n");
     exit(1);
-  } else {
-    // fprintf(stderr, "Connecting to IP: %s\n\n", ip);
   }
 
   // Connect to server that was requested
@@ -141,7 +139,7 @@ int openConnectionWith(HttpRequest req) {
     exit(1);
   }
 
-  // Server response timeout
+  // Server response full timeout
   struct timeval timeout;
   timeout.tv_sec = 10;
   timeout.tv_usec = 0;
@@ -190,6 +188,7 @@ void acceptClient(int connfd) {
   pid_t pid = -1;
 
   do {
+    // Get next request from client
     string reqString;
     try {
       reqString = readRequest(connfd);
@@ -198,14 +197,16 @@ void acceptClient(int connfd) {
     }
     if (reqString.length() > 0) {
       try {
+        // Attempt to parse and send the request
         HttpRequest req;
         req.ParseRequest(reqString.c_str(), reqString.length());
 
         persistent = req.GetVersion() == "1.1";
         shouldClose = req.FindHeader("Connection").compare("close") == 0;
 
+        // Open connection with server if not open
         if (!connectionOpen) {
-          serverfd = openConnectionWith(req);
+          serverfd = openConnectionFor(req);
           connectionOpen = true;
         }
         sendRequest(req, serverfd);
@@ -227,6 +228,7 @@ void acceptClient(int connfd) {
       }
     }
 
+    // If we don't have a process reading responses, fork one
     if (pid < 0) {
       pid = fork();
       if (pid < 0) {
@@ -237,6 +239,7 @@ void acceptClient(int connfd) {
         _exit(0);
       }
     } else {
+      // See if process is done reading responses
       int status;
       waitpid(pid, &status, WNOHANG);
       if (WIFEXITED(status)) {
@@ -275,7 +278,8 @@ char* getHostIP(string hostname) {
  *
  * TODO: Why do we get a broken pipe if we wait to send the buffer until we have a full response?
  * Because this relays all responses....We have to tell when the server is done
- * with sending us a response before we relay it to the client
+ * with sending us a response before we relay it to the client using perhaps content length
+ * Or realizing chunked responses?
  */
 void relayResponse(int serverfd, int clientfd) {
   string buffer;
@@ -283,6 +287,7 @@ void relayResponse(int serverfd, int clientfd) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
 
+    // Set server read timeout
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(serverfd, &readfds);
@@ -291,6 +296,7 @@ void relayResponse(int serverfd, int clientfd) {
         timeout.tv_usec = 0;
     select(serverfd+1, &readfds, NULL, NULL, &timeout);
 
+    // If server short times out, break if we have a full response
     if (!FD_ISSET(serverfd, &readfds)) {
       HttpResponse resp;
       try {
