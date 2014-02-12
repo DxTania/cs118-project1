@@ -15,13 +15,15 @@
 #include "http-response.h"
 #include "http-request.h"
 
+#include <exception>
+
 using namespace std;
 
-#define MAXPROCESSES 5
+#define MAXPROCESSES 10
 #define PORTNUM 15886
 
-const char* readRequest(int connfd);
-string readResponse(int serverfd, int clientfd);
+string readRequest(int connfd);
+void relayResponse(int serverfd, int clientfd);
 int openConnectionWith(HttpRequest req);
 void sendRequest (HttpRequest req, int sockfd);
 void recordChild(pid_t pid, bool record);
@@ -32,6 +34,12 @@ char* getHostIP(string hostname);
 
 int pids[MAXPROCESSES];
 int numChildren = 0;
+
+class ReadTimeout: public exception {
+  virtual const char* what() const throw() {
+    return "Read timed out";
+  }
+};
 
 int main(void) {
   int listenfd = 0, connfd = 0;
@@ -164,7 +172,7 @@ void sendRequest (HttpRequest req, int sockfd) {
   req.FormatRequest(buf);
 
   // Write the request to the server & free buffer
-  write(2, buf, bufsize-1);
+  fprintf(stderr, "Sent request:\n%s", buf);
   write(sockfd, buf, bufsize-1);
   free(buf);
 }
@@ -182,16 +190,16 @@ void acceptClient(int connfd) {
   pid_t pid = -1;
 
   do {
-    const char* reqString = readRequest(connfd);
-    if (reqString == NULL) {
-      // We are done reading requests for the client
-      // TODO: wait for children reading responses?
+    string reqString;
+    try {
+      reqString = readRequest(connfd);
+    } catch (ReadTimeout e) {
       break;
-    } else if (strlen(reqString) != 0) {
+    }
+    if (reqString.length() > 0) {
       try {
         HttpRequest req;
-        // fprintf(stderr, "Attempting to parse:%s<<", reqString);
-        req.ParseRequest(reqString, strlen(reqString));
+        req.ParseRequest(reqString.c_str(), reqString.length());
 
         persistent = req.GetVersion() == "1.1";
         shouldClose = req.FindHeader("Connection").compare("close") == 0;
@@ -203,7 +211,7 @@ void acceptClient(int connfd) {
         sendRequest(req, serverfd);
 
       } catch (ParseException e) {
-        fprintf(stderr, "Exception while parsing %s\n", e.what());
+        // Catch exception and relay back to client
         string response;
         string not_implemented = "Request is not GET";
         fprintf(stderr, "%s\n", e.what());
@@ -225,7 +233,7 @@ void acceptClient(int connfd) {
         fprintf(stderr, "Fork failed\n");
         break;
       } else if (pid == 0) {
-        readResponse(serverfd, connfd);
+        relayResponse(serverfd, connfd);
         _exit(0);
       }
     } else {
@@ -237,7 +245,6 @@ void acceptClient(int connfd) {
     }
   } while(persistent && !shouldClose);
 
-  fprintf(stderr, "Closing connections %d/%d\n", serverfd, connfd);
   close(serverfd);
   close(connfd);
   _exit(0);
@@ -266,7 +273,7 @@ char* getHostIP(string hostname) {
  * timeout @ 2 seconds -> check if we have a response return if we do
  * timeout @ 10 seconds -> return
  */
-string readResponse(int serverfd, int clientfd) {
+void relayResponse(int serverfd, int clientfd) {
   string buffer;
   while (true) {
     char buf[1025];
@@ -284,7 +291,7 @@ string readResponse(int serverfd, int clientfd) {
       HttpResponse resp;
       try {
         resp.ParseResponse(buffer.c_str(), buffer.length());
-        return buffer;
+        break;
       } catch (ParseException e) {
         // If we don't have a full response, wait for read to timeout
       }
@@ -297,12 +304,10 @@ string readResponse(int serverfd, int clientfd) {
     } else if (numBytes == 0) {
       break;
     } else {
-      write(2, buf, numBytes);
       write(clientfd, buf, numBytes);
     }
     buffer.append(buf);
   }
-  return buffer;
 }
 
 /**
@@ -311,7 +316,7 @@ string readResponse(int serverfd, int clientfd) {
  *
  * @return The entire request we read, NULL if client has timed out
  */
-const char* readRequest(int connfd) {
+string readRequest(int connfd) {
   string buffer;
   while (memmem(buffer.c_str(), buffer.length(), "\r\n\r\n", 4) == NULL) {
     char buf[1025];
@@ -320,14 +325,14 @@ const char* readRequest(int connfd) {
     if (numBytes < 0) {
       fprintf(stderr, "Read request error or timeout\n");
       // TODO: Check errno, due to timeout?
-      return NULL;
+      throw ReadTimeout();
     } else if (numBytes == 0) {
       break;
     } else {
       buffer.append(buf);
     }
   }
-  return buffer.c_str();
+  return buffer;
 }
 
 /**
