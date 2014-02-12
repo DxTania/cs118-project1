@@ -38,6 +38,7 @@ You should be able to send an HTTP request and get a response.
 * Connections that could possibly be waiting, are they queued or auto acepted?
 * Are we supposed to support Connection: close header?
 * Persistent connection to us, if requesting files from diff site we need to open new connections? (can clients ask for files from diff sites in same connection?)
+* Other random TODOs in http-proxy.cc
 
 Passes first three tests! Basic object fetching, persistent connection, and concurrent connections.
 
