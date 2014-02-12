@@ -272,6 +272,8 @@ char* getHostIP(string hostname) {
  * Reads the response from the server
  * timeout @ 2 seconds -> check if we have a response return if we do
  * timeout @ 10 seconds -> return
+ *
+ * TODO: Why do we get a broken pipe if we wait to send the buffer until we have a full response?
  */
 void relayResponse(int serverfd, int clientfd) {
   string buffer;
@@ -305,9 +307,10 @@ void relayResponse(int serverfd, int clientfd) {
       break;
     } else {
       write(clientfd, buf, numBytes);
+      buffer.append(buf);
     }
-    buffer.append(buf);
   }
+  fprintf(stderr, "Got response:\n%s\n\n", buffer.c_str());
 }
 
 /**
