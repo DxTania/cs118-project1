@@ -274,6 +274,8 @@ char* getHostIP(string hostname) {
  * timeout @ 10 seconds -> return
  *
  * TODO: Why do we get a broken pipe if we wait to send the buffer until we have a full response?
+ * Because this relays all responses....We have to tell when the server is done
+ * with sending us a response before we relay it to the client
  */
 void relayResponse(int serverfd, int clientfd) {
   string buffer;
