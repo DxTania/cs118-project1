@@ -22,10 +22,8 @@ using namespace std;
 
 const char* readRequest(int connfd);
 string readResponse(int serverfd, int clientfd);
-
 int openConnectionWith(HttpRequest req);
 void sendRequest (HttpRequest req, int sockfd);
-
 void recordChild(pid_t pid, bool record);
 void waitForClient();
 void acceptClient(int connfd);
@@ -55,16 +53,16 @@ int main(void) {
       memset(&client_addr, 0, sizeof(client_addr));
       socklen_t client_size = sizeof(client_addr);
 
-      connfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_size);
+      connfd = accept(listenfd, (struct sockaddr*) &client_addr,
+        &client_size);
 
       // Set timeout for persistent connection closing
-      // TODO:  a better way?
       struct timeval timeout;
       timeout.tv_sec = 20;
       timeout.tv_usec = 0;
 
       setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
-                  sizeof(timeout));
+        sizeof(timeout));
 
       // Fork a process to take care of the client
       pid_t pid = fork();
@@ -77,7 +75,6 @@ int main(void) {
 
       } else {
         // We had space to run another process, record it
-        fprintf(stderr, "\nConnection accepted by child %d\n", pid);
         recordChild(pid, true);
       }
     }
@@ -119,7 +116,7 @@ int openConnectionWith(HttpRequest req) {
     fprintf(stderr, "Invalid host name\n");
     exit(1);
   } else {
-    fprintf(stderr, "Connecting to IP: %s\n\n", ip);
+    // fprintf(stderr, "Connecting to IP: %s\n\n", ip);
   }
 
   // Connect to server that was requested
@@ -136,12 +133,13 @@ int openConnectionWith(HttpRequest req) {
     exit(1);
   }
 
+  // Server response timeout
   struct timeval timeout;
-      timeout.tv_sec = 10;
-      timeout.tv_usec = 0;
+  timeout.tv_sec = 10;
+  timeout.tv_usec = 0;
 
-      setsockopt (sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
-                  sizeof(timeout));
+  setsockopt (sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+    sizeof(timeout));
 
   return sockfd;
 }
@@ -173,7 +171,7 @@ void sendRequest (HttpRequest req, int sockfd) {
 /**
  * Child process only:
  * Attempt to process the client's HTTP request
- * May fork a new process to implement pipelining
+ * Forks a new process every time we expect a response
  */
 void acceptClient(int connfd) {
   HttpRequest req;
@@ -183,26 +181,23 @@ void acceptClient(int connfd) {
   int serverfd = -1;
   pid_t pid = -1;
 
-  // fork a new process to receive and send HTTP requests from the client
-  // and keep main process to receive HTTP responses from server
   try {
     do {
         const char* reqString = readRequest(connfd);
         if (reqString == NULL) {
           // We are done reading requests for the client
-          // wait for children
+          // TODO: wait for children reading responses?
           break;
+        } else if (strlen(reqString) != 0) {
+          req.ParseRequest(reqString, strlen(reqString));
+          persistent = req.GetVersion() == "1.1";
+
+          if (!connectionOpen) {
+            serverfd = openConnectionWith(req);
+            connectionOpen = true;
+          }
+          sendRequest(req, serverfd);
         }
-        req.ParseRequest(reqString, strlen(reqString));
-
-        persistent = req.GetVersion() == "1.1";
-
-        if (!connectionOpen) {
-          serverfd = openConnectionWith(req);
-          connectionOpen = true;
-        }
-
-        sendRequest(req, serverfd);
 
         if (pid < 0) {
           pid = fork();
@@ -262,9 +257,8 @@ char* getHostIP(string hostname) {
 
 /**
  * Reads the response from the server
- * TODO: figure out better way to detect end of HTTP response?
  * What if server sends malformed response? // timeout for receiving a response
- * timeout @ 5 seconds -> check if we have a response return if we do
+ * timeout @ 2 seconds -> check if we have a response return if we do
  * timeout @ 10 seconds -> return
  */
 string readResponse(int serverfd, int clientfd) {
@@ -277,7 +271,7 @@ string readResponse(int serverfd, int clientfd) {
     FD_ZERO(&readfds);
     FD_SET(serverfd, &readfds);
     struct timeval timeout;
-        timeout.tv_sec = 1;
+        timeout.tv_sec = 2;
         timeout.tv_usec = 0;
     select(serverfd+1, &readfds, NULL, NULL, &timeout);
 
@@ -287,14 +281,14 @@ string readResponse(int serverfd, int clientfd) {
         resp.ParseResponse(buffer.c_str(), buffer.length());
         return buffer;
       } catch (ParseException e) {
-        // If we don't have a full response, wait for read itself to timeout
+        // If we don't have a full response, wait for read to timeout
       }
     }
 
     int numBytes = read(serverfd, buf, sizeof(buf));
     if (numBytes < 0) {
       // TODO: check errno, due to timeout?
-      return buffer;
+      break;
     } else if (numBytes == 0) {
       break;
     } else {
