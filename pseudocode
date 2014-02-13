@@ -19,7 +19,8 @@ ACCEPT CLIENT:
     relayResponse
 
   else
-    open new connection
+    open new connection if we have room else wait until we do have room
+      this should happen in openconnectionwith
     insert request to queue (w/ thread #) and connection to list
     send request to serverfd we got when opening
     relayresponse (should not have to wait to read, but wait to write)
