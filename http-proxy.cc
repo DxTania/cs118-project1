@@ -19,20 +19,19 @@
 
 using namespace std;
 
-#define MAXPROCESSES 10
+#define MAXCLIENTS 10
 #define PORTNUM 15886
 
 string readRequest(int connfd);
-void relayResponse(int serverfd, int clientfd);
+void* relayResponse(void* args);
 int openConnectionFor(HttpRequest req);
 void sendRequest (HttpRequest req, int sockfd);
-void recordChild(pid_t pid, bool record);
 void waitForClient();
-void acceptClient(int connfd);
+void* acceptClient(void* connfd);
 int setupServer(struct sockaddr_in server_addr);
 char* getHostIP(string hostname);
 
-int pids[MAXPROCESSES];
+int threads[MAXCLIENTS];
 int numChildren = 0;
 
 class ReadTimeout: public exception {
@@ -46,7 +45,6 @@ int main(void) {
   struct sockaddr_in server_addr;
 
   memset(&server_addr, 0, sizeof(server_addr));
-  memset(&pids, 0, sizeof(pids));
 
   if ((listenfd = setupServer(server_addr)) == -1) {
     // Something went wrong
@@ -55,7 +53,7 @@ int main(void) {
 
   // Main listening loop
   for (;;) {
-    if (numChildren < MAXPROCESSES) {
+    if (numChildren < MAXCLIENTS) {
       // Set up client address struct
       struct sockaddr_in client_addr;
       memset(&client_addr, 0, sizeof(client_addr));
@@ -72,25 +70,16 @@ int main(void) {
       setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
         sizeof(timeout));
 
-      // Fork a process to take care of the client
-      pid_t pid = fork();
-      if (pid < 0) {
-        fprintf(stderr, "Fork failed\n");
-        return -1;
-
-      } else if (pid == 0) {
-        acceptClient(connfd);
-
-      } else {
-        // We had space to run another process, record it
-        recordChild(pid, true);
-      }
+      // Thread for each client
+      pthread_t thread;
+      int *arg = (int*) malloc(sizeof(*arg));
+      *arg = connfd;
+      pthread_create (&thread, 0, acceptClient, arg);
+      numChildren++;
     }
 
     // Don't accept new connections until we have room
-    if (numChildren == MAXPROCESSES) {
-      waitForClient();
-    }
+    while(numChildren == MAXCLIENTS) {}
   }
 
   return 0;
@@ -175,17 +164,20 @@ void sendRequest (HttpRequest req, int sockfd) {
   free(buf);
 }
 
+struct relay_args {
+    int serverfd;
+    int clientfd;
+};
+
 /**
- * Child process only:
  * Attempt to process the client's HTTP request
- * Forks a new process to read responses
+ * Starts new thread to read responses
  */
-void acceptClient(int connfd) {
-  bool persistent = false;
-  bool connectionOpen = false;
-  bool shouldClose = false;
-  int serverfd = -1;
-  pid_t pid = -1;
+void *acceptClient(void* connfdarg) {
+  int serverfd = -1, connfd = *((int *) connfdarg);
+  bool persistent = false, connectionOpen = false;
+  bool shouldClose = false, threadCreated = false;
+  pthread_t thread;
 
   do {
     // Get next request from client
@@ -228,29 +220,26 @@ void acceptClient(int connfd) {
       }
     }
 
-    // If we don't have a process reading responses, fork one
-    if (pid < 0) {
-      pid = fork();
-      if (pid < 0) {
-        fprintf(stderr, "Fork failed\n");
-        break;
-      } else if (pid == 0) {
-        relayResponse(serverfd, connfd);
-        _exit(0);
-      }
+    // If we don't have a thread reading responses, create one
+    if (!threadCreated) {
+      struct relay_args args;
+      args.serverfd = serverfd;
+      args.clientfd = connfd;
+      pthread_create (&thread, NULL, relayResponse, (void *)&args);
+      threadCreated = true;
     } else {
-      // See if process is done reading responses
-      int status;
-      waitpid(pid, &status, WNOHANG);
-      if (WIFEXITED(status)) {
+      // Check if thread died
+     if(pthread_tryjoin_np(thread, NULL) == 0) {
         break;
-      }
+     }
     }
   } while(persistent && !shouldClose);
 
+  pthread_join(thread, NULL);
   close(serverfd);
   close(connfd);
-  _exit(0);
+  numChildren--;
+  pthread_exit(0);
 }
 
 /**
@@ -281,7 +270,11 @@ char* getHostIP(string hostname) {
  * with sending us a response before we relay it to the client using perhaps content length
  * Or realizing chunked responses?
  */
-void relayResponse(int serverfd, int clientfd) {
+void* relayResponse(void *arguments) {
+  struct relay_args *args = (struct relay_args *)arguments;
+  int serverfd = args->serverfd;
+  int clientfd = args->clientfd;
+
   string buffer;
   while (true) {
     char buf[1025];
@@ -318,7 +311,7 @@ void relayResponse(int serverfd, int clientfd) {
       buffer.append(buf);
     }
   }
-  fprintf(stderr, "Got response:\n%s\n\n", buffer.c_str());
+  pthread_exit(0);
 }
 
 /**
@@ -344,21 +337,6 @@ string readRequest(int connfd) {
     }
   }
   return buffer;
-}
-
-/**
- * Record the pid of child process in our pid table
- * If record is false, sets the space of the pid to 0
- */
-void recordChild(pid_t pid, bool record) {
-  for (int i = 0; i < MAXPROCESSES; i++) {
-    if (pids[i] == record? 0 : pid) {
-      pids[i] = record? pid : 0;
-      record ? numChildren++ : numChildren--;
-      break;
-    }
-  }
-  return;
 }
 
 /**
@@ -393,32 +371,4 @@ int setupServer(struct sockaddr_in server_addr) {
   }
 
   return listenfd;
-}
-
-/**
- * Blocks until we can reap a child process
- * and unrecords the child process from our table
- *
- * TODO: Error handling for children that don't exit correctly
- * TODO: make sure all children actually exit at appropriate times
- *
- * TODO: Does this screw up waitpid for acceptClient?
- */
-void waitForClient() {
-  int status;
-  int found = false;
-  pid_t pid;
-
-  while(!found) {
-    pid = waitpid(-1, &status, 0);
-    for(int i = 0; i < MAXPROCESSES; i++) {
-      if (pids[i] == pid) {
-        found = true;
-      }
-    }
-  }
-
-  if (pid > 0 && WIFEXITED(status)) {
-    recordChild(pid, false);
-  }
 }
