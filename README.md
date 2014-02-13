@@ -79,7 +79,7 @@ response for 304 not modified, and implement sending If-Modified-Since in sendRe
 * Make relayResponse return after receiving exactly one response
 - If we get a request we have a connection to, send the request and add to queue
 - If we get a request we don't have connection to, open connection, send request, add to queue
-- For each request, call relayResponse with new thread, thread should not start reading until previous threads in queue w/ SAME server are done reading, thread should not start writing until all previous threads in queue have finished
+- For each request, call relayResponse with new thread, thread should not start reading until previous threads in queue w/ SAME serverFD are done reading, thread should not start writing until all previous threads in queue with same CLIENTFD have finished
 - If server closes on us, close back
 - Timeout on writing to any single server and close if ANY client has not written to that server in time
 
