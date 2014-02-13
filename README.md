@@ -57,3 +57,31 @@ Passes first three tests! Basic object fetching, persistent connection, and conc
 Will have to devise a method of determining when the server is done sending a response in the relayResponse() method as well as implement checking the
 response for 304 not modified, and implement sending If-Modified-Since in sendRequest.
 
+
+### MORE TODO
+
+* Up to 100 simultaneous connections to 100 different servers
+
+* Keep track of how many connections we have opened
+* Keep list of ip/port/fd we are connected to
+
+* If we get a request we have a connection to
+- send request to corresponding fd
+
+* Else
+- Connect to server and send request and mark ip/port/serverfd/CLIENTFD
+
+* if we don't get a request for a server, timeout and close connection to server and decrement connections (make sure if they close on us we decrement connections too)
+
+* Maybe change openConnectionFor to take an ip address instead
+- Calculate ip after parserequest to check if we have connection
+
+* Make relayResponse return after receiving exactly one response
+- If we get a request we have a connection to, send the request and add to queue
+- If we get a request we don't have connection to, open connection, send request, add to queue
+- For each request, call relayResponse with new thread, thread should not start reading until previous threads in queue w/ SAME server are done reading, thread should not start writing until all previous threads in queue have finished
+- If server closes on us, close back
+- Timeout on writing to any single server and close if ANY client has not written to that server in time
+
+* What about seperate clients talking to same server?
+- Open a seperate connection to the server!
