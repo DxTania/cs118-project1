@@ -1,4 +1,4 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+ /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -11,6 +11,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <netdb.h>
+
+#include <list>
+#include <map>
 
 #include "http-response.h"
 #include "http-request.h"
@@ -33,6 +36,29 @@ char* getHostIP(string hostname);
 
 int threads[MAXCLIENTS];
 int numChildren = 0;
+int numConnections = 0;
+
+typedef struct RequestInfo {
+  int fd;
+  pthread_t threadID;
+} RequestInfo_t;
+
+typedef struct ConnectionInfo {
+  int serverfd;
+  int clientfd;
+  string ip;
+  string port;
+} ConnectionInfo_t;
+
+typedef struct CacheKey {
+  string url;
+  string port;
+} CacheKey_t;
+
+map<CacheKey_t, string> cache;
+list<RequestInfo_t> requests;
+list<ConnectionInfo_t> connections;
+list<RequestInfo_t>::interator iter; 
 
 class ReadTimeout: public exception {
   virtual const char* what() const throw() {
@@ -43,6 +69,8 @@ class ReadTimeout: public exception {
 int main(void) {
   int listenfd = 0, connfd = 0;
   struct sockaddr_in server_addr;
+
+  iter = requests.begin();
 
   memset(&server_addr, 0, sizeof(server_addr));
 
@@ -149,6 +177,8 @@ void sendRequest (HttpRequest req, int sockfd) {
   // Do not cache if cache-control is private (or no-cache?)
   // req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
+  //cache.add(req.FindHeader("Host") + req.FindHeader("Path"), ""); // How do 
+
   // Set up request for that server
   size_t bufsize = req.GetTotalLength() + 1;
   char* buf = (char*) malloc(bufsize);
@@ -157,6 +187,8 @@ void sendRequest (HttpRequest req, int sockfd) {
     exit(1);
   }
   req.FormatRequest(buf);
+
+  //  if () 
 
   // Write the request to the server & free buffer
   fprintf(stderr, "Sent request:\n%s", buf);
@@ -177,6 +209,9 @@ void *acceptClient(void* connfdarg) {
   int serverfd = -1, connfd = *((int *) connfdarg);
   bool persistent = false, connectionOpen = false;
   bool shouldClose = false, threadCreated = false;
+  ConnectionInfo_t connection;
+  RequestInfo_t request;
+  string hostname;
   pthread_t thread;
 
   do {
@@ -195,12 +230,25 @@ void *acceptClient(void* connfdarg) {
 
         persistent = req.GetVersion() == "1.1";
         shouldClose = req.FindHeader("Connection").compare("close") == 0;
+        hostname = req.FindHeader("Host");
 
         // Open connection with server if not open
         if (!connectionOpen) {
+          numConnections++; // Increment number of open connections
           serverfd = openConnectionFor(req);
           connectionOpen = true;
+          connection = {
+            .serverfd = serverfd, 
+            .connfd = connfd, 
+            .ip = getHostIP(hostname),
+            .port = req.FindHeader("Port")};
+          connections.add(connection);
         }
+        request = {.fd = serverfd, .threadID = pthread_self()};
+
+        requests.add(request);
+        iter++; // TODO: Should this be where we move the iterator?
+                // Also, should there be an individual interator per thread
         sendRequest(req, serverfd);
 
       } catch (ParseException e) {
@@ -238,8 +286,11 @@ void *acceptClient(void* connfdarg) {
   if (thread > 0) {
     pthread_join(thread, NULL);
   }
-  close(serverfd);
+  close(serverfd); 
   close(connfd);
+  if (numConnections > 0) {
+    numConnections--; // Closed file descriptors indicate closed connection
+  }
   numChildren--;
   pthread_exit(0);
 }
@@ -276,6 +327,14 @@ void* relayResponse(void *arguments) {
   struct relay_args *args = (struct relay_args *)arguments;
   int serverfd = args->serverfd;
   int clientfd = args->clientfd;
+  list<RequestInfo_t>::iterator relayIter = requests.begin();
+
+  while (relayIter < iter) {
+    relayIter++;
+    if (requests[iter].fd == serverfd) {
+      pthread_join(requests[iter].threadID, NULL);
+    }
+  }
 
   string buffer;
   while (true) {
