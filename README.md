@@ -30,6 +30,7 @@ You should be able to send an HTTP request and get a response.
 ## TODO:
 
 * Caching
+```
   - If we get a request
     -- If the request exists in the cache
         Check the response for Last-Modified
@@ -45,6 +46,7 @@ You should be able to send an HTTP request and get a response.
           update cache
         Else
           Just return the response to the client
+```
 * Queued connections, are they taken care of?
 * Persistent connection to us, if requesting files from diff site we need to open new connections? (can clients ask for files from diff sites in same connection?)
 * Other random TODOs in http-proxy.cc
