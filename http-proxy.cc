@@ -235,7 +235,9 @@ void *acceptClient(void* connfdarg) {
     }
   } while(persistent && !shouldClose);
 
-  pthread_join(thread, NULL);
+  if (thread > 0) {
+    pthread_join(thread, NULL);
+  }
   close(serverfd);
   close(connfd);
   numChildren--;
