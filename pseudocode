@@ -66,4 +66,4 @@ When we get a client
     send if-modified-since header with cache response data
     else send the request (can you ask for cache info?)
 
-other: put a mutex on the cache
+other: put a mutex on the cache and number of total connections
