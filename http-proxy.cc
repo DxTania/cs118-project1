@@ -50,12 +50,12 @@ typedef struct ConnectionInfo {
   string port;
 } ConnectionInfo_t;
 
-typedef struct CacheKey {
-  string url;
-  string port;
-} CacheKey_t;
+typedef struct CacheVal {
+  string reponse;
+  string time;
+} CacheVal_t;
 
-map<CacheKey_t, string> cache;
+map<string, CacheVal_t> cache;
 list<RequestInfo_t> requests;
 list<ConnectionInfo_t> connections;
 list<RequestInfo_t>::interator iter; 
@@ -177,18 +177,29 @@ void sendRequest (HttpRequest req, int sockfd) {
   // Do not cache if cache-control is private (or no-cache?)
   // req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
 
-  //cache.add(req.FindHeader("Host") + req.FindHeader("Path"), ""); // How do 
-
   // Set up request for that server
   size_t bufsize = req.GetTotalLength() + 1;
   char* buf = (char*) malloc(bufsize);
+  map<CacheKey_t, CacheVal_t>::iterator cachedResponse;
+  string requestID;
+
   if (buf == NULL) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
     exit(1);
   }
   req.FormatRequest(buf);
 
-  //  if () 
+
+  requestID = req.FindHeader("Host") + req.FindHeader("Path") + req.FindHeader("Port");
+  // TODO: Add mutex!
+  if ((cachedResponse = cache.find(requestID)) != map::end)
+  { // It is! Add header
+    req.AddHeader("If-Modified-Since", ((cachedResponse->second).date).c_str());
+  }
+  else { // It's not! Create entry to store response
+    cache.add(req.FindHeader("Host") + req.FindHeader("Path") + req.FindHeader("Port"), 
+      {.reponse = "", date = req.FindHeader("Date")});
+  }
 
   // Write the request to the server & free buffer
   fprintf(stderr, "Sent request:\n%s", buf);
@@ -359,6 +370,14 @@ void* relayResponse(void *arguments) {
       } catch (ParseException e) {
         // If we don't have a full response, wait for read to timeout
       }
+
+      if (resp.GetStatusCode() == "304") { // Relevant cached response
+        // Is this the correct place?
+      }
+      else if () {// No cache control
+
+      }
+
     }
 
     int numBytes = read(serverfd, buf, sizeof(buf));
