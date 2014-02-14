@@ -19,6 +19,8 @@
 #include "http-request.h"
 
 #include <exception>
+#include <sstream>
+
 
 using namespace std;
 
@@ -27,12 +29,12 @@ using namespace std;
 
 string readRequest(int connfd);
 void* relayResponse(void* args);
-int openConnectionFor(HttpRequest req);
+int openConnectionTo(char* ip, int port);
 void sendRequest (HttpRequest req, int sockfd);
 void waitForClient();
 void* acceptClient(void* connfd);
 int setupServer(struct sockaddr_in server_addr);
-char* getHostIP(string hostname);
+char* getHostIP(HttpRequest req);
 
 int threads[MAXCLIENTS];
 int numChildren = 0;
@@ -46,8 +48,8 @@ typedef struct RequestInfo {
 typedef struct ConnectionInfo {
   int serverfd;
   int clientfd;
-  string ip;
-  string port;
+  char* ip;
+  int port;
 } ConnectionInfo_t;
 
 typedef struct CacheVal {
@@ -55,10 +57,14 @@ typedef struct CacheVal {
   string time;
 } CacheVal_t;
 
+typedef struct relay_args {
+    int serverfd;
+    int clientfd;
+    list<RequestInfo_t> *requests;
+} RelayArgs_t;
+
 map<string, CacheVal_t> cache;
-list<RequestInfo_t> requests;
 list<ConnectionInfo_t> connections;
-list<RequestInfo_t>::interator iter; 
 
 class ReadTimeout: public exception {
   virtual const char* what() const throw() {
@@ -69,8 +75,6 @@ class ReadTimeout: public exception {
 int main(void) {
   int listenfd = 0, connfd = 0;
   struct sockaddr_in server_addr;
-
-  iter = requests.begin();
 
   memset(&server_addr, 0, sizeof(server_addr));
 
@@ -118,7 +122,7 @@ int main(void) {
  *
  * @return The socket file descriptor to the server
  */
-int openConnectionFor(HttpRequest req) {
+int openConnectionTo(char* ip, int port) {
   // More socket fun :D
   struct sockaddr_in remote_addr;
   memset(&remote_addr, 0, sizeof(remote_addr));
@@ -129,27 +133,10 @@ int openConnectionFor(HttpRequest req) {
     exit(1);
   }
 
-  // Get IP of host name
-  char* ip;
-  if (req.GetHost().length() == 0) {
-    ip = getHostIP(req.FindHeader("Host"));
-  } else {
-    ip = getHostIP(req.GetHost());
-  }
-
-  if (ip == NULL) {
-    fprintf(stderr, "Invalid host name\n");
-    exit(1);
-  }
-
   // Connect to server that was requested
   remote_addr.sin_family = AF_INET;
   remote_addr.sin_addr.s_addr = inet_addr(ip);
-  if (req.GetPort() > 0) {
-    remote_addr.sin_port = htons(req.GetPort());
-  } else {
-    remote_addr.sin_port = htons(80);
-  }
+  remote_addr.sin_port = htons(port);
 
   if (connect(sockfd, (struct sockaddr*) &remote_addr, sizeof(remote_addr)) == -1) {
     fprintf(stderr, "Failed to connect to remote server\n");
@@ -171,7 +158,7 @@ int openConnectionFor(HttpRequest req) {
  * Attempts to send the request through the specified socket
  * Using a cache - HTTP Conditional Get
  */
-void sendRequest (HttpRequest req, int sockfd) {
+void sendRequest (HttpRequest req, int sockfd, int clientfd, char* ip, int port) {
   // TODO: Include If-Modified-Since header with cached date
   // If not cached, send request without the If-Modified-Since header
   // Do not cache if cache-control is private (or no-cache?)
@@ -180,7 +167,7 @@ void sendRequest (HttpRequest req, int sockfd) {
   // Set up request for that server
   size_t bufsize = req.GetTotalLength() + 1;
   char* buf = (char*) malloc(bufsize);
-  map<CacheKey_t, CacheVal_t>::iterator cachedResponse;
+  map<string, CacheVal_t>::iterator cachedResponse;
   string requestID;
 
   if (buf == NULL) {
@@ -189,40 +176,58 @@ void sendRequest (HttpRequest req, int sockfd) {
   }
   req.FormatRequest(buf);
 
+  string str;          //The string
+  ostringstream temp;  //temp as in temporary
+  temp << port;
+  str=temp.str();
 
-  requestID = req.FindHeader("Host") + req.FindHeader("Path") + req.FindHeader("Port");
+  requestID = req.GetHost() + req.GetPath() + str;
   // TODO: Add mutex!
-  if ((cachedResponse = cache.find(requestID)) != map::end)
+  if ((cachedResponse = cache.find(requestID)) != cache.end())
   { // It is! Add header
-    req.AddHeader("If-Modified-Since", ((cachedResponse->second).date).c_str());
+    req.AddHeader("If-Modified-Since", ((cachedResponse->second).time).c_str());
+    fprintf(stderr, "Found request in cache\n");
   }
   else { // It's not! Create entry to store response
-    cache.add(req.FindHeader("Host") + req.FindHeader("Path") + req.FindHeader("Port"), 
-      {.reponse = "", date = req.FindHeader("Date")});
+    CacheVal_t val = {"", req.FindHeader("Date")};
+    cache.insert(pair<string, CacheVal_t>(req.GetHost() + req.GetPath() + str, val));
+    fprintf(stderr, "Date was %s\n", req.FindHeader("Date").c_str());
   }
 
+  ConnectionInfo_t connection = {sockfd, clientfd, ip, port};
+  connections.push_front(connection);
+
   // Write the request to the server & free buffer
-  fprintf(stderr, "Sent request:\n%s", buf);
-  write(sockfd, buf, bufsize-1);
+  if (write(sockfd, buf, bufsize-1) < 0) {
+    sockfd = openConnectionTo(ip, port);
+    write(sockfd, buf, bufsize-1);
+  }
+
+  write(2, buf, bufsize-1);
   free(buf);
 }
 
-struct relay_args {
-    int serverfd;
-    int clientfd;
-};
+int connectionIsOpen(char* ip, int port, int clientfd) {
+  for (list<ConnectionInfo_t>::iterator it = connections.begin(); it != connections.end(); it++) {
+    int p = it->port;
+    char* i = it->ip;
+    int cfd = it->clientfd;
+    if (strcmp(ip, i) == 0 && clientfd == cfd && p == port) {
+      return it->serverfd;
+    }
+  }
+  return -1;
+}
 
 /**
  * Attempt to process the client's HTTP request
  * Starts new thread to read responses
  */
 void *acceptClient(void* connfdarg) {
-  int serverfd = -1, connfd = *((int *) connfdarg);
-  bool persistent = false, connectionOpen = false;
+  int connfd = *((int *) connfdarg), serverfd = -1;
+  bool persistent = false;
   bool shouldClose = false, threadCreated = false;
-  ConnectionInfo_t connection;
-  RequestInfo_t request;
-  string hostname;
+  list<RequestInfo_t> requests;
   pthread_t thread;
 
   do {
@@ -241,26 +246,26 @@ void *acceptClient(void* connfdarg) {
 
         persistent = req.GetVersion() == "1.1";
         shouldClose = req.FindHeader("Connection").compare("close") == 0;
-        hostname = req.FindHeader("Host");
+
+        char* ip = getHostIP(req);
+        int port;
+        if (req.GetPort() > 0) {
+          port = req.GetPort();
+        } else {
+          port = 80;
+        }
+
+        serverfd = connectionIsOpen(ip, port, connfd);
 
         // Open connection with server if not open
-        if (!connectionOpen) {
-          numConnections++; // Increment number of open connections
-          serverfd = openConnectionFor(req);
-          connectionOpen = true;
-          connection = {
-            .serverfd = serverfd, 
-            .connfd = connfd, 
-            .ip = getHostIP(hostname),
-            .port = req.FindHeader("Port")};
-          connections.add(connection);
+        if (serverfd < 0) {
+          serverfd = openConnectionTo(ip, port);
         }
-        request = {.fd = serverfd, .threadID = pthread_self()};
 
-        requests.add(request);
-        iter++; // TODO: Should this be where we move the iterator?
-                // Also, should there be an individual interator per thread
-        sendRequest(req, serverfd);
+        RequestInfo_t request = {serverfd, pthread_self()};
+        requests.push_front(request);
+
+        sendRequest(req, serverfd, connfd, ip, port);
 
       } catch (ParseException e) {
         // Catch exception and relay back to client
@@ -280,10 +285,8 @@ void *acceptClient(void* connfdarg) {
     }
 
     // If we don't have a thread reading responses, create one
-    if (!threadCreated) {
-      struct relay_args args;
-      args.serverfd = serverfd;
-      args.clientfd = connfd;
+    if (!threadCreated && requests.size() > 0) {
+      RelayArgs_t args = {serverfd, connfd, &requests};
       pthread_create (&thread, NULL, relayResponse, (void *)&args);
       threadCreated = true;
     } else {
@@ -294,10 +297,12 @@ void *acceptClient(void* connfdarg) {
     }
   } while(persistent && !shouldClose);
 
+  fprintf(stderr, "Exiting\n");
+
   if (thread > 0) {
     pthread_join(thread, NULL);
   }
-  close(serverfd); 
+  close(serverfd);
   close(connfd);
   if (numConnections > 0) {
     numConnections--; // Closed file descriptors indicate closed connection
@@ -311,7 +316,15 @@ void *acceptClient(void* connfdarg) {
  *
  * @return The IP address if found, NULL otherwise
  */
-char* getHostIP(string hostname) {
+char* getHostIP(HttpRequest req) {
+    // Get IP of host name
+  string hostname;
+  if (req.GetHost().length() == 0) {
+    hostname = req.FindHeader("Host");
+  } else {
+    hostname = req.GetHost();
+  }
+
   struct hostent *he;
   struct in_addr **ip_addrs;
 
@@ -321,7 +334,14 @@ char* getHostIP(string hostname) {
   }
 
   ip_addrs = (struct in_addr **) he->h_addr_list;
-  return inet_ntoa(*ip_addrs[0]);
+  char *ip = inet_ntoa(*ip_addrs[0]);
+
+  if (ip == NULL) {
+    fprintf(stderr, "Invalid host name\n");
+    exit(1);
+  }
+
+  return ip;
 }
 
 /**
@@ -338,14 +358,20 @@ void* relayResponse(void *arguments) {
   struct relay_args *args = (struct relay_args *)arguments;
   int serverfd = args->serverfd;
   int clientfd = args->clientfd;
-  list<RequestInfo_t>::iterator relayIter = requests.begin();
+  // list<RequestInfo_t> *requests = args->requests;
 
-  while (relayIter < iter) {
-    relayIter++;
-    if (requests[iter].fd == serverfd) {
-      pthread_join(requests[iter].threadID, NULL);
-    }
-  }
+   // Wait for all requests in front of us (we are the beginning) FIRST MAKE THIS FUNCITON ONLY RELAY ONE RESPONSE!!!
+
+  // fprintf(stderr, "Waiting for threads ahead of us\n");
+  // for (list<RequestInfo_t>::iterator relayIter = ++(*requests).begin(); relayIter != (*requests).end(); relayIter++) {
+  //   if (relayIter->fd == serverfd) {
+  //     pthread_join(relayIter->threadID, NULL);
+  //   }
+  // }
+
+  bool headerParsed = false;
+  size_t beginning = 0;
+  size_t end = 0;
 
   string buffer;
   while (true) {
@@ -370,14 +396,6 @@ void* relayResponse(void *arguments) {
       } catch (ParseException e) {
         // If we don't have a full response, wait for read to timeout
       }
-
-      if (resp.GetStatusCode() == "304") { // Relevant cached response
-        // Is this the correct place?
-      }
-      else if () {// No cache control
-
-      }
-
     }
 
     int numBytes = read(serverfd, buf, sizeof(buf));
@@ -387,10 +405,35 @@ void* relayResponse(void *arguments) {
     } else if (numBytes == 0) {
       break;
     } else {
-      write(clientfd, buf, numBytes);
+      //write(clientfd, buf, numBytes);
       buffer.append(buf);
+
+      // CHUNKED OR CONTENT LENGTH
+      if (!headerParsed) {
+        // Parse entire header if we have it
+        end = buffer.find("\r\n\r\n");
+        if (end == string::npos) {
+          continue;
+        } else {
+          // We have the full header
+          string header = buffer.substr(beginning, end + 4);
+          fprintf(stderr, "Header was %s\n", header);
+        }
+
+      }
+
+
     }
   }
+
+  fprintf(stderr, "Buffer was %s\n", buffer.c_str());
+// if (resp.GetStatusCode() == "304") { // Relevant cached response
+//         // Is this the correct place?
+//       }
+//       else if () {// No cache control
+
+//       }
+
   pthread_exit(0);
 }
 
