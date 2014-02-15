@@ -28,7 +28,7 @@ using namespace std;
 #define PORTNUM 15886
 
 string readRequest(int connfd);
-void relayResponse(int serverfd, int clientfd);
+void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestring);
 int openConnectionTo(char* ip, int port);
 void sendRequest (HttpRequest req, int sockfd);
 void waitForClient();
@@ -36,7 +36,6 @@ void* acceptClient(void* connfd);
 int setupServer(struct sockaddr_in server_addr);
 char* getHostIP(HttpRequest req);
 
-int threads[MAXCLIENTS];
 int numClients = 0;
 int numConnections = 0;
 
@@ -49,7 +48,8 @@ typedef struct ConnectionInfo {
 
 typedef struct CacheVal {
   string reponse;
-  string time;
+  string lastModified;
+  size_t maxAge;
 } CacheVal_t;
 
 map<string, CacheVal_t> cache;
@@ -144,15 +144,38 @@ int openConnectionTo(char* ip, int port) {
 }
 
 /**
+  * Return max age of cache
+  */
+int getCacheControl(string control){
+  if(control.find("private")!=string::npos ||
+    control.find("no-cache")!=string::npos ||
+    control.find("no-store")!=string::npos) {
+      return 0;
+  }
+
+  size_t maxage;
+  if ((maxage = control.find("max-age")) != string::npos) {
+    size_t start = control.find('=');
+    if(start != string::npos){
+      return atoi(control.substr(start + 1).c_str());
+    }
+  }
+
+  return 0;
+}
+
+string intToString(int i) {
+  string portstr;
+  ostringstream temp;
+  temp << i;
+  return temp.str();
+}
+
+/**
  * Attempts to send the request through the specified socket
  * Using a cache - HTTP Conditional Get
  */
 void sendRequest (HttpRequest req, int sockfd, int clientfd, char* ip, int port) {
-  // TODO: Include If-Modified-Since header with cached date
-  // If not cached, send request without the If-Modified-Since header
-  // Do not cache if cache-control is private (or no-cache?)
-  // req.AddHeader("If-Modified-Since", "Wed, 29 Jan 2014 19:43:31 GMT");
-
   // Set up request for that server
   size_t bufsize = req.GetTotalLength() + 1;
   char* buf = (char*) malloc(bufsize);
@@ -165,22 +188,13 @@ void sendRequest (HttpRequest req, int sockfd, int clientfd, char* ip, int port)
   }
   req.FormatRequest(buf);
 
-  string str;          //The string
-  ostringstream temp;  //temp as in temporary
-  temp << port;
-  str=temp.str();
-
-  requestID = req.GetHost() + req.GetPath() + str;
+  requestID = req.GetHost() + req.GetPath() + intToString(port);
   // TODO: Add mutex!
-  if ((cachedResponse = cache.find(requestID)) != cache.end())
-  { // It is! Add header
-    req.AddHeader("If-Modified-Since", ((cachedResponse->second).time).c_str());
+  if ((cachedResponse = cache.find(requestID)) != cache.end()) {
+    // It is! Add header
+    req.AddHeader("If-Modified-Since",
+      ((cachedResponse->second).lastModified).c_str());
     fprintf(stderr, "Found request in cache\n");
-  }
-  else { // It's not! Create entry to store response
-    CacheVal_t val = {"", req.FindHeader("Date")};
-    cache.insert(pair<string, CacheVal_t>(req.GetHost() + req.GetPath() + str, val));
-    fprintf(stderr, "Date was %s\n", req.FindHeader("Date").c_str());
   }
 
   // Write the request to the server & free buffer
@@ -190,18 +204,6 @@ void sendRequest (HttpRequest req, int sockfd, int clientfd, char* ip, int port)
   }
 
   free(buf);
-}
-
-int connectionIsOpen(char* ip, int port, int clientfd) {
-  for (list<ConnectionInfo_t>::iterator it = connections.begin(); it != connections.end(); it++) {
-    int p = it->port;
-    char* i = it->ip;
-    int cfd = it->clientfd;
-    if (strcmp(ip, i) == 0 && clientfd == cfd && p == port) {
-      return it->serverfd;
-    }
-  }
-  return -1;
 }
 
 /**
@@ -219,15 +221,6 @@ void *acceptClient(void* connfdarg) {
     try {
       reqString = readRequest(clientfd);
     } catch (ReadTimeout e) {
-      // Close connections from this client
-      for(list<ConnectionInfo_t>::iterator it = connections.begin();
-          it != connections.end(); it++) {
-        if (it->clientfd == clientfd) {
-          close(it->serverfd);
-        }
-      }
-      // delete the connections from this list!
-      // also delete connection if server quits
       break;
     }
     if (reqString.length() > 0) {
@@ -251,13 +244,15 @@ void *acceptClient(void* connfdarg) {
 
         // Open connection with server if not open
         // if (serverfd < 0) {
-          serverfd = openConnectionTo(ip, port);
+        serverfd = openConnectionTo(ip, port);
           // ConnectionInfo_t connection = {serverfd, clientfd, ip, port};
           // connections.push_front(connection);
         // }
 
         sendRequest(req, serverfd, clientfd, ip, port);
-        relayResponse(serverfd, clientfd);
+
+        string cachestring = req.GetHost() + req.GetPath() + intToString(port);
+        relayResponse(serverfd, clientfd, req, cachestring);
 
       } catch (ParseException e) {
         // Catch exception and relay back to client
@@ -292,12 +287,12 @@ void *acceptClient(void* connfdarg) {
  * with sending us a response before we relay it to the client using perhaps content length
  * Or realizing chunked responses?
  */
-void relayResponse(int serverfd, int clientfd) {
+void relayResponse(int serverfd, int clientfd,
+    HttpRequest req,string cachestring) {
   string transferEncoding, buffer;
   size_t contentLength, contentRead = 0, beginning = 0, end = 0;
-  bool headerParsed = false, isChunked = false;
+  bool headerParsed = false, isChunked = false, notModified = true;
 
-  fprintf(stderr, "Reading response\n");
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
@@ -325,11 +320,13 @@ void relayResponse(int serverfd, int clientfd) {
     int numBytes = read(serverfd, buf, sizeof(buf));
     if (numBytes < 0) {
       // TODO: check errno, due to timeout?
-      close(serverfd);
       break;
     } else if (numBytes == 0) {
       break;
     } else {
+      if (!notModified) {
+        write(clientfd, buf, numBytes);
+      }
       buffer.append(buf);
 
       if (!headerParsed) {
@@ -343,6 +340,15 @@ void relayResponse(int serverfd, int clientfd) {
           string header = buffer.substr(beginning, end + 4);
           HttpResponse resp;
           resp.ParseResponse(header.c_str(), header.length());
+
+          // 304 not modified?
+          if (resp.GetStatusCode().compare("304") == 0) {
+            break;
+          } else {
+            // start writing to client
+            notModified = false;
+            write(clientfd, buffer.c_str(), buffer.length());
+          }
 
           string cl = resp.FindHeader("Content-Length");
           transferEncoding = resp.FindHeader("Transfer-Encoding");
@@ -377,18 +383,27 @@ void relayResponse(int serverfd, int clientfd) {
     }
   }
 
-  write(clientfd, buffer.c_str(), buffer.length());
+  if (notModified) {
+    // send cached result to client if not too old, if too old refresh it
+    // if the age is not too big (time we cached - max cachage age)
+    // if age is not too big, make sure last modified
+  } else {
+    // It's not! Create entry to store response
+    int cacheControl = getCacheControl(req.FindHeader("Cache-Control"));
+    if (cacheControl != 0) {
+      // We are allowed to cache this
+      CacheVal_t val = {
+        buffer,
+        req.FindHeader("Last-Modified"),
+        cacheControl
+      };
+      cache.insert( pair<string, CacheVal_t>( cachestring, val ));
+    } else {
+      // We aren't allowed to cache this
+    }
+  }
 
   close(serverfd);
-  // also delete connection ? NO! TIMEOUT!
-
-// if (resp.GetStatusCode() == "304") { // Relevant cached response
-//         // Is this the correct place?
-//       }
-//       else if () {// No cache control
-
-//       }
-
 }
 
 /**
