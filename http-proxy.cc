@@ -28,7 +28,7 @@ using namespace std;
 #define PORTNUM 15886
 
 string readRequest(int connfd);
-void* relayResponse(void* args);
+void relayResponse(int serverfd, int clientfd);
 int openConnectionTo(char* ip, int port);
 void sendRequest (HttpRequest req, int sockfd);
 void waitForClient();
@@ -37,13 +37,8 @@ int setupServer(struct sockaddr_in server_addr);
 char* getHostIP(HttpRequest req);
 
 int threads[MAXCLIENTS];
-int numChildren = 0;
+int numClients = 0;
 int numConnections = 0;
-
-typedef struct RequestInfo {
-  int fd;
-  pthread_t threadID;
-} RequestInfo_t;
 
 typedef struct ConnectionInfo {
   int serverfd;
@@ -56,12 +51,6 @@ typedef struct CacheVal {
   string reponse;
   string time;
 } CacheVal_t;
-
-typedef struct relay_args {
-    int serverfd;
-    int clientfd;
-    list<RequestInfo_t> *requests;
-} RelayArgs_t;
 
 map<string, CacheVal_t> cache;
 list<ConnectionInfo_t> connections;
@@ -85,7 +74,7 @@ int main(void) {
 
   // Main listening loop
   for (;;) {
-    if (numChildren < MAXCLIENTS) {
+    if (numClients < MAXCLIENTS) {
       // Set up client address struct
       struct sockaddr_in client_addr;
       memset(&client_addr, 0, sizeof(client_addr));
@@ -96,7 +85,7 @@ int main(void) {
 
       // Set timeout for persistent connection closing to client
       struct timeval timeout;
-      timeout.tv_sec = 20;
+      timeout.tv_sec = 10;
       timeout.tv_usec = 0;
 
       setsockopt (connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
@@ -107,11 +96,11 @@ int main(void) {
       int *arg = (int*) malloc(sizeof(*arg));
       *arg = connfd;
       pthread_create (&thread, 0, acceptClient, arg);
-      numChildren++;
+      numClients++;
     }
 
     // Don't accept new connections until we have room
-    while(numChildren == MAXCLIENTS) {}
+    while(numClients == MAXCLIENTS) {}
   }
 
   return 0;
@@ -194,16 +183,12 @@ void sendRequest (HttpRequest req, int sockfd, int clientfd, char* ip, int port)
     fprintf(stderr, "Date was %s\n", req.FindHeader("Date").c_str());
   }
 
-  ConnectionInfo_t connection = {sockfd, clientfd, ip, port};
-  connections.push_front(connection);
-
   // Write the request to the server & free buffer
   if (write(sockfd, buf, bufsize-1) < 0) {
     sockfd = openConnectionTo(ip, port);
     write(sockfd, buf, bufsize-1);
   }
 
-  write(2, buf, bufsize-1);
   free(buf);
 }
 
@@ -224,18 +209,25 @@ int connectionIsOpen(char* ip, int port, int clientfd) {
  * Starts new thread to read responses
  */
 void *acceptClient(void* connfdarg) {
-  int connfd = *((int *) connfdarg), serverfd = -1;
+  int clientfd = *((int *) connfdarg), serverfd = -1;
   bool persistent = false;
-  bool shouldClose = false, threadCreated = false;
-  list<RequestInfo_t> requests;
-  pthread_t thread;
+  bool shouldClose = false;
 
   do {
     // Get next request from client
     string reqString;
     try {
-      reqString = readRequest(connfd);
+      reqString = readRequest(clientfd);
     } catch (ReadTimeout e) {
+      // Close connections from this client
+      for(list<ConnectionInfo_t>::iterator it = connections.begin();
+          it != connections.end(); it++) {
+        if (it->clientfd == clientfd) {
+          close(it->serverfd);
+        }
+      }
+      // delete the connections from this list!
+      // also delete connection if server quits
       break;
     }
     if (reqString.length() > 0) {
@@ -255,17 +247,17 @@ void *acceptClient(void* connfdarg) {
           port = 80;
         }
 
-        serverfd = connectionIsOpen(ip, port, connfd);
+        // serverfd = connectionIsOpen(ip, port, clientfd);
 
         // Open connection with server if not open
-        if (serverfd < 0) {
+        // if (serverfd < 0) {
           serverfd = openConnectionTo(ip, port);
-        }
+          // ConnectionInfo_t connection = {serverfd, clientfd, ip, port};
+          // connections.push_front(connection);
+        // }
 
-        RequestInfo_t request = {serverfd, pthread_self()};
-        requests.push_front(request);
-
-        sendRequest(req, serverfd, connfd, ip, port);
+        sendRequest(req, serverfd, clientfd, ip, port);
+        relayResponse(serverfd, clientfd);
 
       } catch (ParseException e) {
         // Catch exception and relay back to client
@@ -279,69 +271,15 @@ void *acceptClient(void* connfdarg) {
           response = "400 Bad Request\r\n\r\n";
         }
 
-        write(connfd, response.c_str(), response.length());
+        write(clientfd, response.c_str(), response.length());
         shouldClose = true;
       }
     }
-
-    // If we don't have a thread reading responses, create one
-    if (!threadCreated && requests.size() > 0) {
-      RelayArgs_t args = {serverfd, connfd, &requests};
-      pthread_create (&thread, NULL, relayResponse, (void *)&args);
-      threadCreated = true;
-    } else {
-      // Check if thread died
-     if(pthread_tryjoin_np(thread, NULL) == 0) {
-        break;
-     }
-    }
   } while(persistent && !shouldClose);
 
-  fprintf(stderr, "Exiting\n");
-
-  if (thread > 0) {
-    pthread_join(thread, NULL);
-  }
-  close(serverfd);
-  close(connfd);
-  if (numConnections > 0) {
-    numConnections--; // Closed file descriptors indicate closed connection
-  }
-  numChildren--;
+  close(clientfd);
+  numClients--;
   pthread_exit(0);
-}
-
-/**
- * Attempts to get an IP address for the provided hostname
- *
- * @return The IP address if found, NULL otherwise
- */
-char* getHostIP(HttpRequest req) {
-    // Get IP of host name
-  string hostname;
-  if (req.GetHost().length() == 0) {
-    hostname = req.FindHeader("Host");
-  } else {
-    hostname = req.GetHost();
-  }
-
-  struct hostent *he;
-  struct in_addr **ip_addrs;
-
-  if ((he = gethostbyname(hostname.c_str())) == NULL) {
-    fprintf(stderr, "Couldn't get host by name\n");
-    return NULL;
-  }
-
-  ip_addrs = (struct in_addr **) he->h_addr_list;
-  char *ip = inet_ntoa(*ip_addrs[0]);
-
-  if (ip == NULL) {
-    fprintf(stderr, "Invalid host name\n");
-    exit(1);
-  }
-
-  return ip;
 }
 
 /**
@@ -354,26 +292,12 @@ char* getHostIP(HttpRequest req) {
  * with sending us a response before we relay it to the client using perhaps content length
  * Or realizing chunked responses?
  */
-void* relayResponse(void *arguments) {
-  struct relay_args *args = (struct relay_args *)arguments;
-  int serverfd = args->serverfd;
-  int clientfd = args->clientfd;
-  // list<RequestInfo_t> *requests = args->requests;
+void relayResponse(int serverfd, int clientfd) {
+  string transferEncoding, buffer;
+  size_t contentLength, contentRead = 0, beginning = 0, end = 0;
+  bool headerParsed = false, isChunked = false;
 
-   // Wait for all requests in front of us (we are the beginning) FIRST MAKE THIS FUNCITON ONLY RELAY ONE RESPONSE!!!
-
-  // fprintf(stderr, "Waiting for threads ahead of us\n");
-  // for (list<RequestInfo_t>::iterator relayIter = ++(*requests).begin(); relayIter != (*requests).end(); relayIter++) {
-  //   if (relayIter->fd == serverfd) {
-  //     pthread_join(relayIter->threadID, NULL);
-  //   }
-  // }
-
-  bool headerParsed = false;
-  size_t beginning = 0;
-  size_t end = 0;
-
-  string buffer;
+  fprintf(stderr, "Reading response\n");
   while (true) {
     char buf[1025];
     memset(&buf, 0, sizeof(buf));
@@ -401,32 +325,63 @@ void* relayResponse(void *arguments) {
     int numBytes = read(serverfd, buf, sizeof(buf));
     if (numBytes < 0) {
       // TODO: check errno, due to timeout?
+      close(serverfd);
       break;
     } else if (numBytes == 0) {
       break;
     } else {
-      //write(clientfd, buf, numBytes);
       buffer.append(buf);
 
-      // CHUNKED OR CONTENT LENGTH
       if (!headerParsed) {
         // Parse entire header if we have it
         end = buffer.find("\r\n\r\n");
         if (end == string::npos) {
+          // Haven't found got header yet
           continue;
         } else {
-          // We have the full header
+          // We have the full header, determine if content length or chunked by parsing
           string header = buffer.substr(beginning, end + 4);
-          fprintf(stderr, "Header was %s\n", header);
+          HttpResponse resp;
+          resp.ParseResponse(header.c_str(), header.length());
+
+          string cl = resp.FindHeader("Content-Length");
+          transferEncoding = resp.FindHeader("Transfer-Encoding");
+          if (cl.empty() && transferEncoding.compare("chunked") != 0) {
+            fprintf(stderr, "Can't parse this response, no content length of chunked encoding\n");
+          } else if (cl.empty()) {
+            isChunked = true;
+            if(buffer.find("0\r\n\r\n") != string::npos) {
+              // We already got the whole chunk
+              break;
+            }
+          } else {
+            contentLength = atoi(cl.c_str());
+            contentRead += buffer.substr(end + 4).size();
+          }
+          headerParsed = true;
         }
-
+      } else {
+        if (isChunked) {
+          if(buffer.find("0\r\n\r\n") != string::npos) {
+            // We got the whole response
+            break;
+          }
+        } else {
+          contentRead += numBytes;
+          if (contentRead >= contentLength) {
+            // We got the response
+            break;
+          }
+        }
       }
-
-
     }
   }
 
-  fprintf(stderr, "Buffer was %s\n", buffer.c_str());
+  write(clientfd, buffer.c_str(), buffer.length());
+
+  close(serverfd);
+  // also delete connection ? NO! TIMEOUT!
+
 // if (resp.GetStatusCode() == "304") { // Relevant cached response
 //         // Is this the correct place?
 //       }
@@ -434,7 +389,6 @@ void* relayResponse(void *arguments) {
 
 //       }
 
-  pthread_exit(0);
 }
 
 /**
@@ -453,6 +407,7 @@ string readRequest(int connfd) {
       fprintf(stderr, "Read request error or timeout\n");
       // TODO: Check errno, due to timeout?
       throw ReadTimeout();
+      // break;
     } else if (numBytes == 0) {
       break;
     } else {
@@ -494,4 +449,37 @@ int setupServer(struct sockaddr_in server_addr) {
   }
 
   return listenfd;
+}
+
+/**
+ * Attempts to get an IP address for the provided hostname
+ *
+ * @return The IP address if found, NULL otherwise
+ */
+char* getHostIP(HttpRequest req) {
+    // Get IP of host name
+  string hostname;
+  if (req.GetHost().length() == 0) {
+    hostname = req.FindHeader("Host");
+  } else {
+    hostname = req.GetHost();
+  }
+
+  struct hostent *he;
+  struct in_addr **ip_addrs;
+
+  if ((he = gethostbyname(hostname.c_str())) == NULL) {
+    fprintf(stderr, "Couldn't get host by name\n");
+    return NULL;
+  }
+
+  ip_addrs = (struct in_addr **) he->h_addr_list;
+  char *ip = inet_ntoa(*ip_addrs[0]);
+
+  if (ip == NULL) {
+    fprintf(stderr, "Invalid host name\n");
+    exit(1);
+  }
+
+  return ip;
 }
