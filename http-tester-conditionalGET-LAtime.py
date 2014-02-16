@@ -30,6 +30,7 @@ class bcolors:
 class TestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
+        print "Do Get"
         if self.path == "/basic":
             lms = self.headers.get('If-Modified-Since', "")
             cdata = ""

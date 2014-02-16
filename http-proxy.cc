@@ -210,7 +210,11 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       time_t expiry = mktime(&t);
       time_t now = time(NULL);
 
-      double seconds = difftime(expiry, now);
+      tm* gmtm = localtime(&now);
+      time_t gmnow = mktime(gmtm);
+
+      double seconds = difftime(expiry, gmnow);
+      fprintf(stderr, "Expiry was %ld vs %ld\n\n", expiry, gmnow);
       if (seconds > 0) {
         // Still valid due to expiry greater than now
         return false;
@@ -220,11 +224,10 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       return false;
     }
 
-    fprintf(stderr, "Expired\n");
+    fprintf(stderr, "Expired %s %d\n", expires.c_str(), (int) maxAge);
 
     if (!lastModified.empty()) {
       // Else if we have last-modified send a conditional GET request
-      fprintf(stderr, "Sending if modified since\n\n");
       req.AddHeader("If-Modified-Since", lastModified.c_str());
     }
   }
@@ -297,6 +300,8 @@ void *acceptClient(void* connfdarg) {
           fprintf(stderr, "Sending cached entry to client\n\n");
           string response = (*(cache.find(cachestring))).second.response;
           write(clientfd, response.c_str(), response.length());
+          close(serverfd);
+          continue;
         }
 
         relayResponse(serverfd, clientfd, req, cachestring);
@@ -353,6 +358,7 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
         break;
       } catch (ParseException e) {
         // If we don't have a full response, wait for read to timeout
+        fprintf(stderr, "Server short timed out\n\n");
       }
     }
 
@@ -396,7 +402,8 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
           }
           transferEncoding = resp.FindHeader("Transfer-Encoding");
           if (cl.empty() && transferEncoding.compare("chunked") != 0) {
-            fprintf(stderr, "Can't parse this response, no content length or chunked encoding\n%s\n", header.c_str());
+            fprintf(stderr, "Can't parse this response, no content length or chunked encoding\n%s\n",
+              header.c_str());
           } else if (cl.empty()) {
             isChunked = true;
             if(buffer.find("0\r\n\r\n") != string::npos) {
@@ -422,12 +429,13 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
             break;
           }
         }
-      }
-    }
-  }
+      } // end header was parsed
+    } // end we read data
+  } // while
 
   if (notModified) {
     // Send cached result back to client instead
+    fprintf(stderr, "304 Not Modified!\n%s\n\n", buffer.c_str());
     string response = (*(cache.find(cachestring))).second.response;
     write(clientfd, response.c_str(), response.length());
   } else {
@@ -439,7 +447,7 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
     string ex = resp.FindHeader("Expires");
     int cacheControl = getCacheControl(cc);
     if ((!cc.empty() && cacheControl > 0) || !ex.empty()) {
-      // fprintf(stderr, "Trying to cache\n %s\n\n", buffer.c_str());
+      fprintf(stderr, "Chaching\n%s\n\n", buffer.c_str());
       // We are allowed to cache this
       CacheVal_t val = {
         buffer,
@@ -448,7 +456,11 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
         time(NULL),
         cacheControl
       };
-      cache.insert( pair<string, CacheVal_t>( cachestring, val ));
+      pair<map<string, CacheVal_t>::iterator, bool> result =
+        cache.insert( pair<string, CacheVal_t>( cachestring, val ));
+      if (!result.second) {
+        result.first->second = val;
+      }
     } else {
       // We aren't allowed to cache this
     }
