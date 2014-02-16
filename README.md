@@ -3,9 +3,10 @@ CS 118 Project 1 - HTTP Proxy
 
 Partners:
 
-Tania DePasquale
-
-Julian Brown
+Tania DePasquale: 704018998
+* Server/client logic
+Julian Brown: 303946971
+* Caching
 
 ## To start proxy server:
 
