@@ -25,7 +25,7 @@
 using namespace std;
 
 #define MAXCLIENTS 20
-#define PORTNUM 15887
+#define PORTNUM 14886
 
 void* acceptClient(void* connfd);
 int getCacheControl(string control);
@@ -427,10 +427,7 @@ string readRequest(int connfd) {
     memset(&buf, 0, sizeof(buf));
     int numBytes = read(connfd, buf, sizeof(buf) -1);
     if (numBytes < 0) {
-      fprintf(stderr, "Read request error or timeout\n");
-      // TODO: Check errno, due to timeout?
       throw ReadTimeout();
-      // break;
     } else if (numBytes == 0) {
       break;
     } else {
@@ -520,8 +517,8 @@ int getCacheControl(string control){
 
   size_t maxage;
   if ((maxage = control.find("max-age")) != string::npos) {
-    size_t start = control.find('=');
-    if(start != string::npos){
+    size_t start;
+    if((start = control.find('=')) != string::npos){
       return atoi(control.substr(start + 1).c_str());
     }
   }
@@ -543,9 +540,8 @@ string getCacheString(HttpRequest req) {
     p = 80;
   }
 
-  ostringstream temp;
-  temp << p;
-  string port = temp.str();
+  ostringstream port;
+  port << p;
 
-  return req.GetHost() + req.GetPath() + port;
+  return req.GetHost() + req.GetPath() + port.str();
 }
