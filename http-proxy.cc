@@ -20,6 +20,7 @@
 
 #include <exception>
 #include <sstream>
+#include <ctime>
 
 using namespace std;
 
@@ -29,14 +30,14 @@ using namespace std;
 string readRequest(int connfd);
 void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestring);
 int openConnectionFor(HttpRequest req);
-void sendRequest (HttpRequest req, int sockfd);
-void waitForClient();
+bool sendRequest (HttpRequest req, int sockfd, string cachestring);
 void* acceptClient(void* connfd);
 int setupServer(struct sockaddr_in server_addr);
 char* getHostIP(HttpRequest req);
 
 int numClients = 0;
 int numConnections = 0;
+int listenfd = 0;
 
 typedef struct ConnectionInfo {
   int serverfd;
@@ -48,7 +49,9 @@ typedef struct ConnectionInfo {
 typedef struct CacheVal {
   string response;
   string lastModified;
-  size_t maxAge;
+  string expires;
+  time_t cachedDateSeconds;
+  time_t maxAge;
 } CacheVal_t;
 
 map<string, CacheVal_t> cache;
@@ -60,9 +63,17 @@ class ReadTimeout: public exception {
   }
 };
 
+void signalCallback(int signum) {
+   close(listenfd);
+   exit(1);
+}
+
 int main(void) {
-  int listenfd = 0, connfd = 0;
+  int connfd = 0;
   struct sockaddr_in server_addr;
+
+  signal(1, signalCallback);
+  signal(2, signalCallback);
 
   memset(&server_addr, 0, sizeof(server_addr));
 
@@ -151,7 +162,7 @@ int openConnectionFor(HttpRequest req) {
 }
 
 /**
-  * Return max age of cache
+  * Return max age of cache or 0 if we are not allowed to cache
   */
 int getCacheControl(string control){
   if(control.find("private")!=string::npos ||
@@ -171,42 +182,59 @@ int getCacheControl(string control){
   return 0;
 }
 
-string intToString(int i) {
-  string portstr;
-  ostringstream temp;
-  temp << i;
-  return temp.str();
-}
-
 /**
  * Attempts to send the request through the specified socket
  * Using a cache - HTTP Conditional Get
+ *
+ * @return bool False if we have valid cache entry, True if we sent request
  */
-void sendRequest (HttpRequest req, int sockfd, int clientfd, string cachestring) {
+bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
   // Set up request for that server
-  size_t bufsize = req.GetTotalLength() + 1;
-  char* buf = (char*) malloc(bufsize);
   map<string, CacheVal_t>::iterator cachedResponse;
   string requestID;
 
+  // TODO: Add mutex!
+  if ((cachedResponse = cache.find(cachestring)) != cache.end()) {
+    fprintf(stderr, "Found request in cache\n");
+
+    CacheVal_t cacheVal = (*cachedResponse).second;
+    // We have an entry in the cache for this request, if it has not expired, don't send a request at all
+    time_t maxAge = cacheVal.maxAge;
+    time_t timeCached = cacheVal.cachedDateSeconds;
+    string expires = cacheVal.expires;
+    string lastModified = cacheVal.lastModified;
+
+    if (!expires.empty()) {
+      struct tm t;
+      strptime(expires.c_str(), "%a, %d %b %Y %H:%M:%S GMT", &t);
+      time_t expiry = mktime(&t);
+      time_t now = time(NULL);
+
+      double seconds = difftime(expiry, now);
+      if (seconds > 0) {
+        // Still valid due to expiry greater than now
+        return false;
+      }
+    } else if (maxAge > 0 && timeCached + maxAge > time(NULL) ) {
+      // Still valid (takes precedence over expires time)
+      return false;
+    }
+
+    fprintf(stderr, "Expired\n");
+
+    if (!lastModified.empty()) {
+      // Else if we have last-modified send a conditional GET request
+      fprintf(stderr, "Sending if modified since\n\n");
+      req.AddHeader("If-Modified-Since", lastModified.c_str());
+    }
+  }
+
+  size_t bufsize = req.GetTotalLength() + 1;
+  char* buf = (char*) malloc(bufsize);
   if (buf == NULL) {
     fprintf(stderr, "Failed to allocate buffer for request\n");
     exit(1);
   }
-
-  // TODO: Add mutex!
-  if ((cachedResponse = cache.find(cachestring)) != cache.end()) {
-    // It is! Add header IF IT IS NOT EXPIRED!!!!!!
-    // cached date + max age must be past current time
-    // Also send if-modified since with last modified date
-    req.AddHeader("If-Modified-Since",
-      ((cachedResponse->second).lastModified).c_str());
-    fprintf(stderr, "Found request in cache\n");
-  }
-
-  // if cached response is not expired, simply return that!
-  // otherwise send if modified since? or no header?
-  // if no max age, just send if modified since last modified
 
   req.FormatRequest(buf);
 
@@ -217,6 +245,22 @@ void sendRequest (HttpRequest req, int sockfd, int clientfd, string cachestring)
   }
 
   free(buf);
+  return true;
+}
+
+string getCacheString(HttpRequest req) {
+  int p;
+  if (req.GetPort() > 0) {
+    p = req.GetPort();
+  } else {
+    p = 80;
+  }
+
+  ostringstream temp;
+  temp << p;
+  string port = temp.str();
+
+  return req.GetHost() + req.GetPath() + port;
 }
 
 /**
@@ -245,24 +289,16 @@ void *acceptClient(void* connfdarg) {
         persistent = req.GetVersion() == "1.1";
         shouldClose = req.FindHeader("Connection").compare("close") == 0;
 
-        // serverfd = connectionIsOpen(ip, port, clientfd);
-
-        // Open connection with server if not open
-        // if (serverfd < 0) {
         serverfd = openConnectionFor(req);
 
-        int port;
-        if (req.GetPort() > 0) {
-          port = req.GetPort();
-        } else {
-          port = 80;
+        string cachestring = getCacheString(req);
+        if (!sendRequest(req, serverfd, cachestring)) {
+          // We have a valid cache entry, send that to client instead
+          fprintf(stderr, "Sending cached entry to client\n\n");
+          string response = (*(cache.find(cachestring))).second.response;
+          write(clientfd, response.c_str(), response.length());
         }
-          // ConnectionInfo_t connection = {serverfd, clientfd, ip, port};
-          // connections.push_front(connection);
-        // }
 
-        string cachestring = req.GetHost() + req.GetPath() + intToString(port);
-        sendRequest(req, serverfd, clientfd, cachestring);
         relayResponse(serverfd, clientfd, req, cachestring);
 
       } catch (ParseException e) {
@@ -289,17 +325,9 @@ void *acceptClient(void* connfdarg) {
 }
 
 /**
- * Reads the response from the server
- * timeout @ 2 seconds -> check if we have a response return if we do
- * timeout @ 10 seconds -> return
- *
- * TODO: Why do we get a broken pipe if we wait to send the buffer until we have a full response?
- * Because this relays all responses....We have to tell when the server is done
- * with sending us a response before we relay it to the client using perhaps content length
- * Or realizing chunked responses?
+ * Reads and relays a response from server to client
  */
-void relayResponse(int serverfd, int clientfd,
-    HttpRequest req, string cachestring) {
+void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestring) {
   string transferEncoding, buffer;
   size_t contentLength, contentRead = 0, beginning = 0, end = 0;
   bool headerParsed = false, isChunked = false, notModified = true;
@@ -315,7 +343,7 @@ void relayResponse(int serverfd, int clientfd,
     struct timeval timeout;
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
-    select(serverfd+1, &readfds, NULL, NULL, &timeout);
+    select(serverfd + 1, &readfds, NULL, NULL, &timeout);
 
     // If server short times out, break if we have a full response
     if (!FD_ISSET(serverfd, &readfds)) {
@@ -336,6 +364,7 @@ void relayResponse(int serverfd, int clientfd,
       break;
     } else {
       if (!notModified) {
+        // Don't keep the client waiting
         write(clientfd, buf, numBytes);
       }
       buffer.append(buf);
@@ -344,7 +373,7 @@ void relayResponse(int serverfd, int clientfd,
         // Parse entire header if we have it
         end = buffer.find("\r\n\r\n");
         if (end == string::npos) {
-          // Haven't found got header yet
+          // Haven't found the header yet
           continue;
         } else {
           // We have the full header, determine if content length or chunked by parsing
@@ -356,15 +385,18 @@ void relayResponse(int serverfd, int clientfd,
           if (resp.GetStatusCode().compare("304") == 0) {
             break;
           } else {
-            // start writing to client
+            // Start writing to client
             notModified = false;
             write(clientfd, buffer.c_str(), buffer.length());
           }
 
           string cl = resp.FindHeader("Content-Length");
+          if (cl.empty()) {
+            cl = resp.FindHeader("Content-length");
+          }
           transferEncoding = resp.FindHeader("Transfer-Encoding");
           if (cl.empty() && transferEncoding.compare("chunked") != 0) {
-            fprintf(stderr, "Can't parse this response, no content length of chunked encoding\n");
+            fprintf(stderr, "Can't parse this response, no content length or chunked encoding\n%s\n", header.c_str());
           } else if (cl.empty()) {
             isChunked = true;
             if(buffer.find("0\r\n\r\n") != string::npos) {
@@ -386,7 +418,7 @@ void relayResponse(int serverfd, int clientfd,
         } else {
           contentRead += numBytes;
           if (contentRead >= contentLength) {
-            // We got the response
+            // We got the whole response
             break;
           }
         }
@@ -395,17 +427,25 @@ void relayResponse(int serverfd, int clientfd,
   }
 
   if (notModified) {
-    // send cached result
+    // Send cached result back to client instead
     string response = (*(cache.find(cachestring))).second.response;
     write(clientfd, response.c_str(), response.length());
   } else {
-    // It's not! Create entry to store response
-    int cacheControl = getCacheControl(req.FindHeader("Cache-Control"));
-    if (cacheControl != 0) {
+    // Cache the response if possible
+    HttpResponse resp;
+    resp.ParseResponse(buffer.c_str(), buffer.length());
+
+    string cc = resp.FindHeader("Cache-Control");
+    string ex = resp.FindHeader("Expires");
+    int cacheControl = getCacheControl(cc);
+    if ((!cc.empty() && cacheControl > 0) || !ex.empty()) {
+      // fprintf(stderr, "Trying to cache\n %s\n\n", buffer.c_str());
       // We are allowed to cache this
       CacheVal_t val = {
         buffer,
-        req.FindHeader("Last-Modified"),
+        resp.FindHeader("Last-Modified"),
+        resp.FindHeader("Expires"),
+        time(NULL),
         cacheControl
       };
       cache.insert( pair<string, CacheVal_t>( cachestring, val ));
@@ -421,7 +461,7 @@ void relayResponse(int serverfd, int clientfd,
  * Reads the request from the current client connection until
  * we receive the substring which ends HTTP requests \r\n\r\n
  *
- * @return The entire request we read, NULL if client has timed out
+ * @return The entire request we read
  */
 string readRequest(int connfd) {
   string buffer;
@@ -478,12 +518,11 @@ int setupServer(struct sockaddr_in server_addr) {
 }
 
 /**
- * Attempts to get an IP address for the provided hostname
+ * Attempts to get an IP address for the provided request
  *
  * @return The IP address if found, NULL otherwise
  */
 char* getHostIP(HttpRequest req) {
-    // Get IP of host name
   string hostname;
   if (req.GetHost().length() == 0) {
     hostname = req.FindHeader("Host");
@@ -496,7 +535,7 @@ char* getHostIP(HttpRequest req) {
 
   if ((he = gethostbyname(hostname.c_str())) == NULL) {
     fprintf(stderr, "Couldn't get host by name\n");
-    return NULL;
+    exit(1);
   }
 
   ip_addrs = (struct in_addr **) he->h_addr_list;

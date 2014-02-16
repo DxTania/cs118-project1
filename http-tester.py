@@ -4,13 +4,14 @@ from threading import Thread
 from httplib import HTTPConnection
 from BaseHTTPServer import BaseHTTPRequestHandler,HTTPServer
 from datetime import datetime, timedelta
+#from bcolor import bcolors
 import sys
 import time
 
 class bcolors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
-    OKGREEN = '\033[92m'
+    PASS = '\033[92m'
     WARNING = '\033[93m'
     FAIL = '\033[91m'
     ENDC = '\033[0m'
@@ -166,11 +167,12 @@ server2 = ServerThread(int(sport2))
 server1.start()
 server2.start()
 
+
 client1 = ClientThread("127.0.0.1:" + pport, "http://127.0.0.1:" + sport1 + "/basic", "./basic")
 client1.start()
 client1.join()
 if client1.result:
-    print "Basic object fetching: [" + bcolors.OKGREEN + "PASSED" + bcolors.ENDC + "]"
+    print "Basic object fetching: [" + bcolors.PASS + "PASSED" + bcolors.ENDC + "]"
 else:
     print "Basic object fetching: [" + bcolors.FAIL + "FAILED" + bcolors.ENDC + "]"
 
@@ -178,7 +180,7 @@ client2 = ClientPersistThread("127.0.0.1:" + pport, "http://127.0.0.1:" + sport1
 client2.start()
 client2.join()
 if client2.result:
-    print "Persistent Connection: [" + bcolors.OKGREEN + "PASSED" + bcolors.ENDC + "]"
+    print "Persistent Connection: [" + bcolors.PASS + "PASSED" + bcolors.ENDC + "]"
 else:
     print "Persistent Connection: [" + bcolors.FAIL + "FAILED" + bcolors.ENDC + "]"
 
@@ -199,7 +201,7 @@ cdata = datafile.read()
 if(end - start) < 4 and client3.data == cdata and client4.data == cdata:
     r = True
 if r:
-    print "Concurrent Connection: [" + bcolors.OKGREEN + "PASSED" + bcolors.ENDC + "]"
+    print "Concurrent Connection: [" + bcolors.PASS + "PASSED" + bcolors.ENDC + "]"
 else:
     print "Concurrent Connection: [" + bcolors.FAIL + "FAILED" + bcolors.ENDC + "]"
 
@@ -214,7 +216,7 @@ r = False
 if client5.data == client6.data and client5.data != "":
     r = True
 if r:
-    print "Caching: [" + bcolors.OKGREEN + "PASSED" + bcolors.ENDC + "]"
+    print "Caching: [" + bcolors.PASS + "PASSED" + bcolors.ENDC + "]"
 else:
     print "Caching: [" + bcolors.FAIL + "FAILED" + bcolors.ENDC + "]"
 
