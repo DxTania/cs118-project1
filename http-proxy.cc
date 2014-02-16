@@ -119,6 +119,7 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
   map<string, CacheVal_t>::iterator cachedResponse;
   // Check if we even need to send the request
   if ((cachedResponse = cache.find(cachestring)) != cache.end()) {
+
     CacheVal_t cacheVal = (*cachedResponse).second;
     // Don't send a request if we don't have to
     time_t maxAge = cacheVal.maxAge;
@@ -135,7 +136,7 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       tm* gmtm = localtime(&now);
       time_t gmnow = mktime(gmtm);
 
-      // fprintf(stderr, "Expiry vals were %ld %ld\n", expiry, gmnow);
+      fprintf(stderr, "Expiry vals were %ld %ld\n%s\n", expiry, gmnow, expires.c_str());
       double seconds = difftime(expiry, gmnow);
       if (seconds > 0) {
         // Still valid due to expiry greater than now
