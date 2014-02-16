@@ -24,8 +24,8 @@
 
 using namespace std;
 
-#define MAXCLIENTS 10
-#define PORTNUM 15886
+#define MAXCLIENTS 20
+#define PORTNUM 15887
 
 void* acceptClient(void* connfd);
 int getCacheControl(string control);
@@ -57,8 +57,8 @@ class ReadTimeout: public exception {
 };
 
 void signalCallback(int signum) {
-   close(listenfd);
-   exit(1);
+  close(listenfd);
+  exit(1);
 }
 
 int main(void) {
@@ -135,6 +135,7 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       tm* gmtm = localtime(&now);
       time_t gmnow = mktime(gmtm);
 
+      // fprintf(stderr, "Expiry vals were %ld %ld\n", expiry, gmnow);
       double seconds = difftime(expiry, gmnow);
       if (seconds > 0) {
         // Still valid due to expiry greater than now
@@ -144,7 +145,6 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       // Still valid (takes precedence over expires time)
       return false;
     }
-
     if (!lastModified.empty()) {
       // Else if we have last-modified send a conditional GET request
       req.AddHeader("If-Modified-Since", lastModified.c_str());
