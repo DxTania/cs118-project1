@@ -39,6 +39,7 @@ int setupServer(struct sockaddr_in server_addr);
 
 int numClients = 0;
 int listenfd = 0;
+pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct CacheVal {
   string response;
@@ -114,7 +115,9 @@ int main(void) {
  */
 bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
   map<string, CacheVal_t>::iterator cachedResponse;
-  // Check if we even need to send the request
+
+  // Check if we even need to send the request, mutex required for multiple threads could be checking cache
+  pthread_mutex_lock(&cache_mutex);
   if ((cachedResponse = cache.find(cachestring)) != cache.end()) {
 
     CacheVal_t cacheVal = (*cachedResponse).second;
@@ -148,6 +151,7 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       req.AddHeader("If-Modified-Since", lastModified.c_str());
     }
   }
+  pthread_mutex_unlock(&cache_mutex);
 
   // Get size of request and allocate buffer
   size_t bufsize = req.GetTotalLength() + 1;
@@ -197,7 +201,10 @@ void *acceptClient(void* connfdarg) {
         string cachestring = getCacheString(req);
         if (!sendRequest(req, serverfd, cachestring)) {
           // We have a valid cache entry, send that to client instead
+          pthread_mutex_lock(&cache_mutex);
           string response = (*(cache.find(cachestring))).second.response;
+          pthread_mutex_unlock(&cache_mutex);
+
           write(clientfd, response.c_str(), response.length());
           close(serverfd);
         } else {
@@ -331,7 +338,10 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
 
   if (notModified) {
     // Send cached result back to client instead
+    pthread_mutex_lock(&cache_mutex);
     string response = (*(cache.find(cachestring))).second.response;
+    pthread_mutex_unlock(&cache_mutex);
+
     write(clientfd, response.c_str(), response.length());
 
   } else {
@@ -353,8 +363,10 @@ void relayResponse(int serverfd, int clientfd, HttpRequest req, string cachestri
         cacheControl
       };
 
+      pthread_mutex_lock(&cache_mutex);
       pair<map<string, CacheVal_t>::iterator, bool> result =
         cache.insert( pair<string, CacheVal_t>( cachestring, val ));
+      pthread_mutex_unlock(&cache_mutex);
 
       // Allow overwriting
       if (!result.second) {
