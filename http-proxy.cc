@@ -130,14 +130,14 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
     if (!expires.empty()) {
       // Check if the cache entry has expired this is LOCAL TIME! (Passes LA test)
       struct tm t;
+      memset(&t, 0, sizeof(struct tm));
       strptime(expires.c_str(), "%a, %d %b %Y %H:%M:%S GMT", &t);
+
       time_t expiry = mktime(&t);
       time_t now = time(NULL);
-      tm* gmtm = localtime(&now);
-      time_t gmnow = mktime(gmtm);
 
-      fprintf(stderr, "Expiry vals were %ld %ld\n%s\n", expiry, gmnow, expires.c_str());
-      double seconds = difftime(expiry, gmnow);
+      // fprintf(stderr, "Expiry vals were %ld %ld\n%s\n", expiry, now, expires.c_str());
+      double seconds = difftime(expiry, now);
       if (seconds > 0) {
         // Still valid due to expiry greater than now
         return false;
