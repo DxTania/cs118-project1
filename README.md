@@ -32,6 +32,8 @@ telnet 127.0.0.1 14886
 
 * http-tester.py passes all tests
 * http-tester-conditionalGET-LAtime.py passes all tests
+ - This one seems slightly inconsistent due to something with times in sendRequest (Expiry and now)
+ - Unsure if it may have been because I forgot to restart the server
 * Must restart server in bewteen the tests because the cached value from first test interferes
 * I emailed you about someone forking our repository. If it seems as though someone else has similar code, I can make the following github repo: https://github.com/DxTania/cs118-project1 public again so I may prove this code is ours.
 * There are timeouts for the following:
