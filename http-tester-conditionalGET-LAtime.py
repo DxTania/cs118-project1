@@ -4,9 +4,12 @@ from threading import Thread
 from httplib import HTTPConnection
 from BaseHTTPServer import BaseHTTPRequestHandler,HTTPServer
 from datetime import datetime, timedelta
+#from bcolor import bcolors
 import sys
 import time
 import re, socket, calendar
+from datetime import datetime
+from time import sleep
 
 class bcolors:
     HEADER = '\033[95m'
@@ -31,30 +34,36 @@ class TestHandler(BaseHTTPRequestHandler):
             lms = self.headers.get('If-Modified-Since', "")
             cdata = ""
             if lms != "":
-                m_ts = calendar.timegm(time.strptime(lms, "%a, %d %b %Y %H:%M:%S GMT"))
-                c_ts = calendar.timegm(time.gmtime())
-                if c_ts - m_ts > 5 and c_ts - m_ts < 10:
+                m_ts = datetime.strptime(lms, "%a, %d %b %Y %H:%M:%S GMT")
+                c_ts = datetime.now()
+
+                diff = c_ts - m_ts
+
+                # this is a current version of the content
+                if diff.seconds > 5 and diff.seconds < 10:
                     lastModify=lms
-                    expireDate=(datetime.utcnow()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    expireDate=(datetime.now()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
                     self.hit = True
                     self.send_response(304)
                     self.send_header('Expires',expireDate)
                     self.send_header('Last-Modified', lastModify)
-                elif c_ts - m_ts > 10:
+                # give a new version of the content
+                elif diff.seconds > 10:
                     cdata = "OK"
                     size = len(cdata)
-                    expireDate=(datetime.utcnow()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-                    lastModify=(datetime.utcnow()).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    expireDate=(datetime.now()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    lastModify=(datetime.now()).strftime("%a, %d %b %Y %H:%M:%S GMT")
                     self.send_response(200)
                     self.send_header('Content-type','text/html')
                     self.send_header('Content-length', str(size))
                     self.send_header('Expires',expireDate)
                     self.send_header('Last-Modified', lastModify)
+                # content must be served from cache, it is wrong that you ask original server
                 else:
                     cdata = "WRONG!\n"
                     size = len(cdata)
-                    expireDate=(datetime.utcnow()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-                    lastModify=(datetime.utcnow()).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    expireDate=(datetime.now()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    lastModify=(datetime.now()).strftime("%a, %d %b %Y %H:%M:%S GMT")
                     self.send_response(200)
                     self.send_header('Content-type','text/html')
                     self.send_header('Content-length', str(size))
@@ -64,8 +73,8 @@ class TestHandler(BaseHTTPRequestHandler):
             else:
                 cdata = open("./basic", "r").read()
                 size = len(cdata)
-                expireDate=(datetime.utcnow()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-                lastModify=(datetime.utcnow()).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                expireDate=(datetime.now()+timedelta(seconds=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                lastModify=(datetime.now()).strftime("%a, %d %b %Y %H:%M:%S GMT")
                 self.send_response(200)
                 self.send_header('Content-type','text/html')
                 self.send_header('Content-length', str(size))
@@ -107,6 +116,7 @@ try:
     cdata = dataFile.read()
     r = False
     proxy = '127.0.0.1:'+pport
+
     conn = HTTPConnection(proxy)
     conn.request("GET", "http://127.0.0.1:" + sport1 + "/basic")
     resp = conn.getresponse()
@@ -133,7 +143,6 @@ try:
     resp4 = conn4.getresponse()
     data4 = resp4.read()
     conn4.close()
-
 
     if data4 == "OK" and data3 == cdata and data2 == cdata:
         r = True
