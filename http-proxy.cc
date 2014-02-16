@@ -101,9 +101,6 @@ int main(void) {
       pthread_create (&thread, 0, acceptClient, arg);
       numClients++;
     }
-
-    // Don't accept new connections until we have room
-    while(numClients == MAXCLIENTS) {}
   }
 
   return 0;
