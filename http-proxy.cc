@@ -114,14 +114,15 @@ int main(void) {
  * @return bool False if we have a valid cache entry, True if we sent a request
  */
 bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
-  map<string, CacheVal_t>::iterator cachedResponse;
 
   // Check if we even need to send the request, mutex required for multiple threads could be checking cache
   pthread_mutex_lock(&cache_mutex);
-  if ((cachedResponse = cache.find(cachestring)) != cache.end()) {
+  map<string, CacheVal_t>::iterator cachedResponse = cache.find(cachestring);
+  pthread_mutex_unlock(&cache_mutex);
 
-    CacheVal_t cacheVal = (*cachedResponse).second;
+  if (cachedResponse != cache.end()) {
     // Don't send a request if we don't have to
+    CacheVal_t cacheVal = (*cachedResponse).second;
     time_t maxAge = cacheVal.maxAge;
     time_t timeCached = cacheVal.cachedDateSeconds;
     string expires = cacheVal.expires;
@@ -151,7 +152,6 @@ bool sendRequest (HttpRequest req, int sockfd, string cachestring) {
       req.AddHeader("If-Modified-Since", lastModified.c_str());
     }
   }
-  pthread_mutex_unlock(&cache_mutex);
 
   // Get size of request and allocate buffer
   size_t bufsize = req.GetTotalLength() + 1;
